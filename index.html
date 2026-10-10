@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#182b3a">
+  <title>Gierka komputerowa — wielka ucieczka</title>
+  <style>
+    :root { color-scheme: dark; --ink:#f8f1d5; --gold:#f2bd4b; --red:#d95143; }
+    * { box-sizing:border-box; }
+    html,body { margin:0; min-height:100%; background:#101d28; color:var(--ink); font-family:system-ui,-apple-system,"Segoe UI",sans-serif; }
+    body { display:grid; place-items:center; padding:18px; }
+    .cabinet { width:min(100%,1000px); }
+    .heading { display:flex; align-items:end; justify-content:space-between; gap:16px; margin:0 4px 12px; }
+    h1 { font-size:clamp(1.3rem,3vw,2rem); line-height:1; margin:0; letter-spacing:.04em; color:#ffe5a1; text-shadow:0 3px #7a402b; }
+    .subtitle { margin:6px 0 0; color:#b5c1bb; font-size:.85rem; }
+    .badge { color:#20313a; background:#f2bd4b; padding:6px 10px; border-radius:4px; font-size:.72rem; font-weight:900; letter-spacing:.08em; white-space:nowrap; }
+    .screen { overflow:hidden; position:relative; border:4px solid #d49b48; border-radius:8px; background:#88bfd0; box-shadow:0 14px 0 #70492e,0 24px 55px #0008; }
+    canvas { display:block; width:100%; aspect-ratio:16/9; touch-action:none; image-rendering:auto; }
+    .hint { display:flex; justify-content:space-between; gap:12px; margin:20px 4px 0; color:#adbbb8; font-size:.77rem; }
+    kbd { color:#f8e6b0; background:#263845; border:1px solid #51606a; border-radius:4px; padding:2px 6px; font:inherit; }
+    @media(max-width:600px) { body{padding:10px}.heading{align-items:start}.badge{font-size:.6rem}.hint{font-size:.68rem;flex-direction:column;gap:4px} }
+  </style>
+</head>
+<body>
+  <main class="cabinet">
+    <header class="heading">
+      <div><h1>Gierka komputerowa</h1><p class="subtitle">Wielka ucieczka Edwarda G.</p></div>
+      <span class="badge">EDYCJA LUDOWA · 1981</span>
+    </header>
+    <div class="screen"><canvas id="game" width="960" height="540" aria-label="Gra Gierka komputerowa"></canvas></div>
+    <footer class="hint"><span><kbd>↑</kbd> / <kbd>Spacja</kbd> skok · <kbd>↓</kbd> kucanie</span><span>Telefon: prawa/górna strefa — skok · lewa/dolna — kucanie</span></footer>
+  </main>
+<script>
+(() => {
+  'use strict';
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height, GROUND = 438;
+  const rand = (a,b) => a + Math.random() * (b-a);
+  const clamp = (n,a,b) => Math.max(a,Math.min(b,n));
+  const game = { mode:'loading', last:0, elapsed:0, distance:0, debt:0, speed:330, spawn:1.2, obstacles:[], pickups:[], particles:[], shake:0, sound:null, muted:false, jumpHeld:false, assetsReady:false, assetError:'' };
+  const player = { x:145, y:GROUND-86, w:54, h:86, vy:0, lives:3, grounded:true, crouch:false, invuln:0, shield:0, boost:0, doubleJump:false, blink:0 };
+  const clouds = Array.from({length:6},()=>({x:rand(0,W),y:rand(45,170),s:rand(.7,1.5)}));
+  const sprites = Object.create(null);
+  const spriteFiles = {
+    gierek:'assets/gierek.png', nysa:'assets/nysa.png', fiat:'assets/fiat.png',
+    stork:'assets/bocian.png', worker:'assets/robotnik.png', orange:'assets/pomarancza.png',
+    dollar:'assets/dolar.png', sausage:'assets/kielbasa.png', background:'assets/wielka_plyta.jpg'
+  };
+  const ridgePath = new Path2D();
+  ridgePath.moveTo(-110,GROUND-92);
+  for(let x=-110;x<=W+110;x+=55) ridgePath.lineTo(x,GROUND-92-Math.sin(x/96)*15);
+  ridgePath.lineTo(W+110,GROUND);ridgePath.lineTo(-110,GROUND);ridgePath.closePath();
+
+  function audio() {
+    if (game.muted) return null;
+    try {
+      if (!game.sound) game.sound = new (window.AudioContext||window.webkitAudioContext)();
+      if (game.sound.state!=='running'&&game.sound.state!=='closed'&&!game.resumePromise) {
+        game.resumePromise=game.sound.resume().catch(()=>{}).finally(()=>{game.resumePromise=null;});
+      }
+      return game.sound;
+    } catch { return null; }
+  }
+  function tone(freq,duration,type='square',volume=.055,endFreq=freq) {
+    const ac=audio(); if(!ac) return;
+    if(ac.state!=='running') {
+      try {
+        const resume=game.resumePromise||ac.resume();
+        Promise.resolve(resume).then(()=>{if(ac.state==='running')tone(freq,duration,type,volume,endFreq);}).catch(()=>{});
+      } catch { /* The browser may reject audio outside an active gesture. */ }
+      return;
+    }
+    try {
+      const o=ac.createOscillator(), g=ac.createGain(); o.type=type; o.frequency.setValueAtTime(freq,ac.currentTime); o.frequency.exponentialRampToValueAtTime(Math.max(30,endFreq),ac.currentTime+duration);
+      g.gain.setValueAtTime(volume,ac.currentTime); g.gain.exponentialRampToValueAtTime(.001,ac.currentTime+duration); o.connect(g);g.connect(ac.destination);o.start();o.stop(ac.currentTime+duration);
+    } catch { /* Audio failures must never interrupt the game loop. */ }
+  }
+  function sound(kind) {
+    if(kind==='jump') tone(230,.13,'square',.045,480);
+    if(kind==='pickup') { tone(600,.1,'square',.04,900); setTimeout(()=>tone(900,.12,'square',.035,1200),65); }
+    if(kind==='hit') { tone(150,.28,'sawtooth',.07,48); }
+    if(kind==='over') { tone(300,.6,'triangle',.06,65); }
+  }
+  function reset() {
+    if(!game.assetsReady) return;
+    game.mode='playing'; game.elapsed=0; game.distance=0; game.debt=0; game.speed=330; game.spawn=.9;
+    game.obstacles=[]; game.pickups=[]; game.particles=[]; game.shake=0;
+    Object.assign(player,{y:GROUND-86,vy:0,lives:3,grounded:true,crouch:false,invuln:0,shield:0,boost:0,doubleJump:false,blink:0});
+    game.last=performance.now(); audio();
+  }
+  function jump() {
+    if(!game.assetsReady) return;
+    if(game.mode!=='playing') { if(game.mode!=='playing') reset(); return; }
+    if(player.grounded) { player.vy=-770; player.grounded=false; sound('jump'); }
+    else if(player.doubleJump) { player.vy=-690; player.doubleJump=false; sound('jump'); burst(player.x+25,player.y+player.h,'#f7d86a',8); }
+  }
+  function setCrouch(v) { player.crouch=v; }
+  function spawnObstacle() {
+    const roll=Math.random(); let type;
+    if(roll<.28) type='nysa'; else if(roll<.48) type='fiat'; else if(roll<.70) type='stork'; else type='worker';
+    const dims={nysa:[98,59],fiat:[108,54],stork:[94,43],worker:[66,100]}[type];
+    game.obstacles.push({type,x:W+30,y: type==='stork'?GROUND-116:GROUND-dims[1],w:dims[0],h:dims[1],passed:false});
+    if(Math.random()<.64) {
+      const kind=['orange','dollar','sausage'][Math.floor(Math.random()*3)];
+      game.pickups.push({kind,x:W+rand(190,360),y:kind==='sausage'?GROUND-62:GROUND-rand(100,185),r:kind==='sausage'?16:15,spin:0});
+    }
+  }
+  function burst(x,y,color,count=12) { for(let i=0;i<count;i++) game.particles.push({x,y,vx:rand(-180,180),vy:rand(-220,20),life:rand(.25,.65),max:.65,color}); }
+  function playerBox() {
+    const crouch=player.crouch&&player.grounded, h=crouch?49:86;
+    return {x:player.x+15,y:player.y+(86-h)+4,w:player.w-28,h:h-8};
+  }
+  function boxes(a,b) { return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y; }
+  function takeHit() {
+    if(player.invuln>0||player.shield>0) { if(player.shield>0) {player.shield=0;burst(player.x+25,player.y+35,'#72dcff',16);} return; }
+    player.lives--; player.invuln=1.35; game.shake=12; sound('hit'); burst(player.x+25,player.y+40,'#f27d61',14);
+    if(player.lives<=0) {game.mode='over';sound('over');}
+  }
+  function collect(p) {
+    if(p.kind==='orange') { player.boost=5; player.doubleJump=true; game.debt=Math.max(0,game.debt-25000); }
+    if(p.kind==='dollar') { player.shield=6; game.debt=Math.max(0,game.debt-50000); }
+    if(p.kind==='sausage') {player.lives=Math.min(3,player.lives+1); game.debt=Math.max(0,game.debt-10000);}
+    sound('pickup'); burst(p.x,p.y,p.kind==='orange'?'#ff9e3d':p.kind==='dollar'?'#78dcff':'#f5e7bd',14);
+  }
+  function update(dt) {
+    if(game.mode!=='playing') return;
+    game.elapsed+=dt; game.distance+=game.speed*dt/12; game.speed=Math.min(650,330+game.elapsed*5.2)+(player.boost>0?105:0);
+    game.debt+=dt*(3200+game.elapsed*82); player.boost=Math.max(0,player.boost-dt); player.shield=Math.max(0,player.shield-dt); player.invuln=Math.max(0,player.invuln-dt); player.blink+=dt;
+    player.vy+=1950*dt; player.y+=player.vy*dt;
+    if(player.y>=GROUND-86) {
+      player.y=GROUND-86;player.vy=0;player.grounded=true;
+      if(game.jumpHeld) jump();
+    }
+    game.spawn-=dt; if(game.spawn<=0) {spawnObstacle();game.spawn=rand(1.15,1.8)*Math.max(.64,380/game.speed);}
+    for(const o of game.obstacles) o.x-=game.speed*dt*(o.type==='fiat'?1.24:1);
+    for(const p of game.pickups) {p.x-=game.speed*dt;p.spin+=dt*5;}
+    const pb=playerBox();
+    for(let i=game.obstacles.length-1;i>=0;i--) {
+      const o=game.obstacles[i];
+      let ob={x:o.x+15,y:o.y+12,w:o.w-30,h:o.h-20};
+      if(o.type==='stork') ob={x:o.x+17,y:o.y+12,w:o.w-34,h:o.h-22};
+      if(boxes(pb,ob)&&!o.hit) {o.hit=true;takeHit();}
+      if(o.x+o.w<=-40) game.obstacles.splice(i,1);
+    }
+    for(let i=game.pickups.length-1;i>=0;i--) {
+      const p=game.pickups[i];
+      if(!p.got&&Math.hypot((player.x+27)-p.x,(player.y+38)-p.y)<42) {p.got=true;collect(p);}
+      if(p.got||p.x+20<=-20) game.pickups.splice(i,1);
+    }
+    for(let i=game.particles.length-1;i>=0;i--) {
+      const p=game.particles[i];p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=450*dt;p.life-=dt;
+      if(p.life<=0) game.particles.splice(i,1);
+    }
+    game.shake=Math.max(0,game.shake-dt*32);
+  }
+
+  function rect(x,y,w,h,color) {ctx.fillStyle=color;ctx.fillRect(Math.round(x),Math.round(y),Math.round(w),Math.round(h));}
+  function drawContain(image,x,y,w,h) {
+    const scale=Math.min(w/image.naturalWidth,h/image.naturalHeight);
+    const drawW=image.naturalWidth*scale,drawH=image.naturalHeight*scale;
+    ctx.drawImage(image,x+(w-drawW)/2,y+(h-drawH)/2,drawW,drawH);
+  }
+  function drawSky() {
+    const grad=ctx.createLinearGradient(0,0,0,H);grad.addColorStop(0,'#78bad0');grad.addColorStop(.72,'#c6dfc7');grad.addColorStop(1,'#f0d89f');ctx.fillStyle=grad;ctx.fillRect(0,0,W,H);
+    // Sun and soft pixel clouds
+    ctx.fillStyle='#ffe7a0';ctx.beginPath();ctx.arc(790,103,39,0,Math.PI*2);ctx.fill();
+    for(const c of clouds) {const x=((c.x-game.distance*.17)%(W+180)+W+180)%(W+180)-70; const s=c.s;rect(x,c.y,75*s,19*s,'#f4f0dc');rect(x+15*s,c.y-12*s,42*s,14*s,'#f4f0dc');rect(x+66*s,c.y+5*s,26*s,13*s,'#f4f0dc');}
+    // Repeat and slowly scroll the supplied housing-estate photo as a parallax layer.
+    if(sprites.background) {
+      const img=sprites.background, sourceY=img.naturalHeight*.24, sourceH=img.naturalHeight-sourceY;
+      const offset=(game.distance*.12)%W, y=GROUND-250;
+      ctx.drawImage(img,0,sourceY,img.naturalWidth,sourceH,-offset,y,W,250);
+      ctx.drawImage(img,0,sourceY,img.naturalWidth,sourceH,W-offset,y,W,250);
+    } else {ctx.fillStyle='#718d83';ctx.fill(ridgePath);}
+    rect(0,GROUND,W,H-GROUND,'#c99c55');rect(0,GROUND,W,12,'#588147');
+    for(let x=-((game.distance*1.6)%48);x<W;x+=48) {rect(x,GROUND+17,26,4,'#b78243');rect(x+22,GROUND+40,18,3,'#dfb66d');}
+  }
+  function drawGierek() {
+    const crouch=player.crouch&&player.grounded, x=player.x, y=player.y+(crouch?34:0), scaleY=crouch?.61:1;
+    if(sprites.gierek) {
+      const image=sprites.gierek, drawW=player.h*image.naturalWidth/image.naturalHeight;
+      ctx.drawImage(image,x+(player.w-drawW)/2,y,drawW,player.h*scaleY);
+    }
+    if(player.shield>0) {ctx.strokeStyle=`rgba(114,220,255,${.45+.2*Math.sin(game.elapsed*9)})`;ctx.lineWidth=4;ctx.beginPath();ctx.ellipse(x+27,y+42,42,50,0,0,Math.PI*2);ctx.stroke();}
+  }
+  function drawObstacle(o) {
+    const image=sprites[o.type];if(!image)return;
+    if(o.type==='stork') drawContain(image,o.x-7,o.y-35,o.w+14,o.h+55);
+    else drawContain(image,o.x,o.y,o.w,o.h);
+  }
+  function drawPickup(p) {
+    ctx.save();ctx.translate(p.x,p.y);ctx.rotate(Math.sin(p.spin)*.12);
+    const image=sprites[p.kind];
+    if(image) {
+      const w=p.kind==='sausage'?42:34,h=p.kind==='sausage'?30:36;
+      drawContain(image,-w/2,-h/2,w,h);
+    }
+    ctx.restore();
+  }
+  function drawHud() {
+    rect(18,16,924,63,'rgba(20,39,48,.83)');
+    ctx.fillStyle='#f1bf4e';ctx.font='bold 15px system-ui';ctx.fillText('DŁUG ZAGRANICZNY',34,41);
+    ctx.fillStyle='#fff1c9';ctx.font='bold 25px ui-monospace,monospace';ctx.fillText('$ '+Math.floor(game.debt).toLocaleString('pl-PL'),34,66);
+    ctx.fillStyle='#b8c7c1';ctx.font='bold 12px system-ui';ctx.fillText('DYSTANS  '+Math.floor(game.distance)+' m',315,43);
+    ctx.fillStyle='#fff1c9';ctx.font='23px system-ui';for(let i=0;i<3;i++){ctx.globalAlpha=i<player.lives?1:.22;ctx.fillText('♥',770+i*34,54);}ctx.globalAlpha=1;
+    if(player.boost>0||player.shield>0) {ctx.font='bold 11px system-ui';ctx.fillStyle=player.boost>0?'#ffb653':'#78dcff';ctx.fillText(player.boost>0?`POMARAŃCZOWY DOPING ${player.boost.toFixed(1)}s`:`TARCZA FINANSOWA ${player.shield.toFixed(1)}s`,315,65);}
+  }
+  function panel(title,lines,button) {
+    ctx.fillStyle='rgba(14,27,34,.74)';ctx.fillRect(0,0,W,H);
+    rect(185,115,590,315,'#e1bf78');rect(193,123,574,299,'#263b43');
+    ctx.textAlign='center';ctx.fillStyle='#ffe2a0';ctx.font='900 36px system-ui';ctx.fillText(title,W/2,174);
+    ctx.fillStyle='#eee8d4';ctx.font='16px system-ui';lines.forEach((line,i)=>ctx.fillText(line,W/2,218+i*29));
+    if(button) {rect(343,340,274,54,'#d95143');rect(349,346,262,42,'#efb847');ctx.fillStyle='#27363b';ctx.font='900 18px system-ui';ctx.fillText(button,W/2,374);}
+    ctx.textAlign='left';
+  }
+  function render() {
+    ctx.save();if(game.shake>0)ctx.translate(rand(-game.shake,game.shake),rand(-game.shake,game.shake));
+    if(game.mode==='loading'||game.mode==='asset-error') {
+      drawSky();ctx.restore();
+      if(game.mode==='loading') panel('ŁADOWANIE GRAFIK',['Wczytuję obrazy gry. Za chwilę zaczynamy.'],'');
+      else panel('BRAK GRAFIKI',[game.assetError,'Sprawdź pliki w folderze assets i odśwież stronę.'],'ODŚWIEŻ STRONĘ');
+      return;
+    }
+    drawSky();for(const p of game.pickups)drawPickup(p);for(const o of game.obstacles)drawObstacle(o);
+    for(const p of game.particles){ctx.globalAlpha=clamp(p.life/p.max,0,1);rect(p.x,p.y,5,5,p.color);}ctx.globalAlpha=1;
+    if(!(player.invuln>0&&Math.floor(player.blink*14)%2===0))drawGierek();drawHud();ctx.restore();
+    if(game.mode==='ready') panel('WIELKA UCIECZKA',['Edward Gierek rusza w trasę. Fabryka już czeka!','Skacz nad pojazdami, kucaj pod bocianami.','Zbieraj zapasy. Dług rośnie z każdym metrem.'],'ROZPOCZNIJ BIEG');
+    if(game.mode==='over') panel('KONIEC BIEGU',[`Dług końcowy: $ ${Math.floor(game.debt).toLocaleString('pl-PL')}`,`Wynik: ${Math.floor(game.distance)} m`,'Towarzyszu, plan wykonany… prawie.'],'ZAGRAJ PONOWNIE');
+  }
+  function frame(now) {const dt=Math.min(.05,(now-game.last)/1000||0);game.last=now;update(dt);render();requestAnimationFrame(frame);}
+  function loadSprites() {
+    return Promise.all(Object.entries(spriteFiles).map(([name,src])=>new Promise((resolve,reject)=>{
+      const image=new Image();
+      image.onload=()=>{sprites[name]=image;resolve(image);};
+      image.onerror=()=>reject(new Error(`Brak pliku: ${src}`));
+      image.src=src;
+    })));
+  }
+  function inButton(e) {const r=canvas.getBoundingClientRect();const x=(e.clientX-r.left)*W/r.width,y=(e.clientY-r.top)*H/r.height;return x>=343&&x<=617&&y>=340&&y<=394;}
+  window.addEventListener('keydown',e=>{
+    if(['ArrowUp','ArrowDown',' '].includes(e.key)) e.preventDefault();
+    audio();
+    if(e.repeat)return;
+    if(e.key==='ArrowUp'||e.key===' ') {game.jumpHeld=true;jump();}
+    if(e.key==='ArrowDown')setCrouch(true);
+    if(e.key.toLowerCase()==='m')game.muted=!game.muted;
+  });
+  window.addEventListener('keyup',e=>{if(e.key==='ArrowDown')setCrouch(false);if(e.key==='ArrowUp'||e.key===' ')game.jumpHeld=false;});
+  window.addEventListener('blur',()=>{game.jumpHeld=false;setCrouch(false);});
+  canvas.addEventListener('pointerdown',e=>{
+    e.preventDefault();audio();canvas.setPointerCapture?.(e.pointerId);
+    if(game.mode!=='playing') {
+      if(inButton(e)&&game.mode==='asset-error') location.reload();
+      else if(inButton(e)) reset();
+      return;
+    }
+    if(e.pointerType==='touch') {
+      const r=canvas.getBoundingClientRect(),x=(e.clientX-r.left)*W/r.width,y=(e.clientY-r.top)*H/r.height;
+      if(x<W/2||y>=H*.72) setCrouch(true); else jump();
+    } else jump();
+  });
+  canvas.addEventListener('pointerup',()=>setCrouch(false));
+  canvas.addEventListener('pointercancel',()=>setCrouch(false));
+  canvas.addEventListener('contextmenu',e=>e.preventDefault());
+  game.last=performance.now();requestAnimationFrame(frame);
+  loadSprites().then(()=>{game.assetsReady=true;game.mode='ready';}).catch(error=>{game.assetError=error.message;game.mode='asset-error';});
+})();
+</script>
+</body>
+</html>
