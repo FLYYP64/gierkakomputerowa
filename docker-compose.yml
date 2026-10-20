@@ -1,0 +1,13 @@
+services:
+  leaderboard:
+    build:
+      context: ./backend
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      DB_PATH: /app/data/scores.db
+      CORS_ORIGIN: "*"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

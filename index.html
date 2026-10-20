@@ -12,19 +12,30 @@
     body { display:grid; place-items:center; }
     #game { display:block; width:min(100vw,177.7778vh); height:min(100vh,56.25vw); max-width:100vw; max-height:100vh; aspect-ratio:16/9; touch-action:none; image-rendering:auto; }
     @supports (height:100dvh) { #game { width:min(100vw,177.7778dvh); height:min(100dvh,56.25vw); max-height:100dvh; } }
+    .nickname-control { position:fixed; z-index:2; display:flex; align-items:center; gap:10px; width:min(370px,calc(100vw - 24px)); padding:8px 12px; transform:translate(-50%,-50%); color:#fff1c9; background:#20343eeF; border:2px solid #d49b48; border-radius:7px; font:700 14px system-ui,sans-serif; }
+    .nickname-control[hidden] { display:none; }
+    .nickname-control input { flex:1; min-width:0; height:34px; padding:0 9px; border:1px solid #8c7952; border-radius:4px; color:#1d2b31; background:#fff7e2; font:600 16px system-ui,sans-serif; }
   </style>
 </head>
 <body>
   <canvas id="game" width="960" height="540" aria-label="Gra Gierka komputerowa"></canvas>
+  <div id="nickname-control" class="nickname-control" hidden>
+    <label for="nickname">Twój nick</label>
+    <input id="nickname" name="nickname" type="text" maxlength="24" autocomplete="nickname" placeholder="Anonim">
+  </div>
 <script>
 (() => {
   'use strict';
+  const API_URL = "HTTPS://TWOJ-ADRES-SERWERA/api/scores"; // Replace with your deployed API URL.
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
+  const nicknameControl = document.getElementById('nickname-control');
+  const nicknameInput = document.getElementById('nickname');
   const W = canvas.width, H = canvas.height, GROUND = 438;
   const rand = (a,b) => a + Math.random() * (b-a);
   const clamp = (n,a,b) => Math.max(a,Math.min(b,n));
-  const game = { mode:'loading', last:0, elapsed:0, distance:0, debt:0, speed:330, spawn:1.2, obstacles:[], pickups:[], particles:[], shake:0, sound:null, muted:false, jumpHeld:false, assetsReady:false, assetError:'' };
+  const game = { mode:'loading', last:0, elapsed:0, distance:0, debt:0, speed:330, spawn:1.2, obstacles:[], pickups:[], particles:[], shake:0, sound:null, muted:false, jumpHeld:false, assetsReady:false, assetError:'', nickname:'Anonim', scoreSubmitted:false, leaderboard:[], leaderboardMessage:'Ładowanie rekordów…' };
+  const jumpKeysDown = new Set();
   const player = { x:145, y:GROUND-86, w:54, h:86, vy:0, lives:3, grounded:true, crouch:false, invuln:0, shield:0, boost:0, doubleJump:false, blink:0 };
   const clouds = Array.from({length:6},()=>({x:rand(0,W),y:rand(45,170),s:rand(.7,1.5)}));
   const sprites = Object.create(null);
@@ -33,6 +44,8 @@
     stork:'assets/bocian.png', worker:'assets/robotnik.png', orange:'assets/pomarancza.png',
     dollar:'assets/dolar.png', sausage:'assets/kielbasa.png', background:'assets/wielka_plyta.jpg'
   };
+  try { nicknameInput.value=localStorage.getItem('last_nickname')||'Anonim'; }
+  catch { nicknameInput.value='Anonim'; }
   const ridgePath = new Path2D();
   ridgePath.moveTo(-110,GROUND-92);
   for(let x=-110;x<=W+110;x+=55) ridgePath.lineTo(x,GROUND-92-Math.sin(x/96)*15);
@@ -68,9 +81,55 @@
     if(kind==='hit') { tone(150,.28,'sawtooth',.07,48); }
     if(kind==='over') { tone(300,.6,'triangle',.06,65); }
   }
+  function cleanNickname(value) { return String(value||'').trim().slice(0,24)||'Anonim'; }
+  async function loadLeaderboard() {
+    try {
+      const response=await fetch(`${API_URL}?sort=distance`,{headers:{Accept:'application/json'}});
+      if(!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data=await response.json();
+      const rows=Array.isArray(data)?data:data?.scores;
+      if(!Array.isArray(rows)) throw new Error('Invalid leaderboard response');
+      game.leaderboard=rows.slice(0,10);
+      game.leaderboardMessage=rows.length?'':'Brak zapisanych wyników.';
+      return true;
+    } catch {
+      game.leaderboardMessage='Lista rekordów jest niedostępna.';
+      return false;
+    }
+  }
+  async function submitScore() {
+    if(game.scoreSubmitted) return;
+    game.scoreSubmitted=true;
+    game.leaderboardMessage='Zapisywanie wyniku…';
+    try {
+      const response=await fetch(API_URL,{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({nickname:game.nickname,debt:Math.round(game.debt),distance:Math.round(game.distance)})
+      });
+      if(!response.ok) throw new Error(`HTTP ${response.status}`);
+      const refreshed=await loadLeaderboard();
+      game.leaderboardMessage=refreshed?'Wynik zapisany.':'Wynik zapisany, ale lista jest niedostępna.';
+    } catch {
+      await loadLeaderboard();
+      game.leaderboardMessage='Nie udało się zapisać wyniku.';
+    }
+  }
+  function syncNicknameControl() {
+    const visible=game.mode==='ready';
+    nicknameControl.hidden=!visible;
+    if(!visible) return;
+    const bounds=canvas.getBoundingClientRect();
+    nicknameControl.style.left=`${bounds.left+bounds.width/2}px`;
+    nicknameControl.style.top=`${bounds.top+bounds.height*.56}px`;
+  }
   function reset() {
     if(!game.assetsReady) return;
-    game.mode='playing'; game.elapsed=0; game.distance=0; game.debt=0; game.speed=330; game.spawn=.9;
+    game.nickname=cleanNickname(nicknameInput.value);
+    nicknameInput.value=game.nickname;
+    try {localStorage.setItem('last_nickname',game.nickname);} catch {}
+    game.scoreSubmitted=false;
+    game.mode='playing';syncNicknameControl(); game.elapsed=0; game.distance=0; game.debt=0; game.speed=330; game.spawn=.9;
     game.obstacles=[]; game.pickups=[]; game.particles=[]; game.shake=0;
     Object.assign(player,{y:GROUND-86,vy:0,lives:3,grounded:true,crouch:false,invuln:0,shield:0,boost:0,doubleJump:false,blink:0});
     game.last=performance.now(); audio();
@@ -101,7 +160,7 @@
   function takeHit() {
     if(player.invuln>0||player.shield>0) { if(player.shield>0) {player.shield=0;burst(player.x+25,player.y+35,'#72dcff',16);} return; }
     player.lives--; player.invuln=1.35; game.shake=12; sound('hit'); burst(player.x+25,player.y+40,'#f27d61',14);
-    if(player.lives<=0) {game.mode='over';sound('over');}
+    if(player.lives<=0) {game.mode='over';syncNicknameControl();sound('over');void submitScore();}
   }
   function collect(p) {
     if(p.kind==='orange') { player.boost=5; player.doubleJump=true; game.debt=Math.max(0,game.debt-25000); }
@@ -125,7 +184,9 @@
     for(let i=game.obstacles.length-1;i>=0;i--) {
       const o=game.obstacles[i];
       let ob={x:o.x+15,y:o.y+12,w:o.w-30,h:o.h-20};
-      if(o.type==='stork') ob={x:o.x+17,y:o.y+12,w:o.w-34,h:o.h-22};
+      // The stork flies at head height: its collision band overlaps a standing
+      // player, but ends just above the crouching hitbox.
+      if(o.type==='stork') ob={x:o.x+17,y:o.y+42,w:o.w-34,h:26};
       if(boxes(pb,ob)&&!o.hit) {o.hit=true;takeHit();}
       if(o.x+o.w<=-40) game.obstacles.splice(i,1);
     }
@@ -200,6 +261,33 @@
     if(button) {rect(343,340,274,54,'#d95143');rect(349,346,262,42,'#efb847');ctx.fillStyle='#27363b';ctx.font='900 18px system-ui';ctx.fillText(button,W/2,374);}
     ctx.textAlign='left';
   }
+  function drawGameOverPanel() {
+    ctx.fillStyle='rgba(14,27,34,.78)';ctx.fillRect(0,0,W,H);
+    rect(72,28,816,484,'#e1bf78');rect(80,36,800,468,'#263b43');
+    ctx.textAlign='center';ctx.fillStyle='#ffe2a0';ctx.font='900 31px system-ui';ctx.fillText('DOSYĆ TYCH GIEREK',W/2,84);
+    ctx.fillStyle='#eee8d4';ctx.font='bold 16px system-ui';
+    ctx.fillText(`Dług końcowy: $ ${Math.floor(game.debt).toLocaleString('pl-PL')}   ·   Dystans: ${Math.floor(game.distance)} m`,W/2,121);
+    ctx.fillStyle='#f1bf4e';ctx.font='900 18px system-ui';ctx.fillText('TOP 5 NAJLEPSZYCH WYNIKÓW',W/2,165);
+    ctx.textAlign='left';ctx.fillStyle='#b9c7c2';ctx.font='bold 12px system-ui';
+    ctx.fillText('MIEJSCE',120,196);ctx.fillText('NICK',225,196);
+    ctx.textAlign='right';ctx.fillText('DŁUG',642,196);ctx.fillText('DYSTANS',825,196);
+    ctx.font='14px system-ui';
+    const rows=game.leaderboard.slice(0,5);
+    rows.forEach((score,index)=>{
+      const y=224+index*31;
+      ctx.textAlign='left';ctx.fillStyle=index===0?'#f2bd4b':'#eee8d4';
+      ctx.fillText(String(index+1).padStart(2,'0'),130,y);
+      ctx.fillText(cleanNickname(score.nickname),225,y);
+      ctx.textAlign='right';
+      ctx.fillText(`$ ${Math.floor(Number(score.debt)||0).toLocaleString('pl-PL')}`,642,y);
+      ctx.fillText(`${Math.floor(Number(score.distance)||0).toLocaleString('pl-PL')} m`,825,y);
+    });
+    if(!rows.length) {ctx.textAlign='center';ctx.fillStyle='#eee8d4';ctx.fillText(game.leaderboardMessage||'Brak wyników.',W/2,236);}
+    else if(game.leaderboardMessage) {ctx.textAlign='center';ctx.fillStyle='#b9c7c2';ctx.font='12px system-ui';ctx.fillText(game.leaderboardMessage,W/2,388);}
+    rect(343,420,274,54,'#d95143');rect(349,426,262,42,'#efb847');
+    ctx.textAlign='center';ctx.fillStyle='#27363b';ctx.font='900 17px system-ui';ctx.fillText('ZAGRAJ PONOWNIE',W/2,453);
+    ctx.textAlign='left';
+  }
   function render() {
     ctx.save();if(game.shake>0)ctx.translate(rand(-game.shake,game.shake),rand(-game.shake,game.shake));
     if(game.mode==='loading'||game.mode==='asset-error') {
@@ -212,7 +300,7 @@
     for(const p of game.particles){ctx.globalAlpha=clamp(p.life/p.max,0,1);rect(p.x,p.y,5,5,p.color);}ctx.globalAlpha=1;
     if(!(player.invuln>0&&Math.floor(player.blink*14)%2===0))drawGierek();drawHud();ctx.restore();
     if(game.mode==='ready') panel('GIERKA KOMPUTEROWA',['Edward Gierek rusza w trasę. Fabryka już czeka!','Skacz nad pojazdami, kucaj pod bocianami.','Zbieraj zapasy. Dług rośnie z każdym metrem.'],'ROZPOCZNIJ BIEG');
-    if(game.mode==='over') panel('DOSYĆ TYCH GIEREK',[`Dług końcowy: $ ${Math.floor(game.debt).toLocaleString('pl-PL')}`,`Wynik: ${Math.floor(game.distance)} m`,'Towarzyszu, plan wykonany… prawie.'],'ZAGRAJ PONOWNIE');
+    if(game.mode==='over') drawGameOverPanel();
   }
   function frame(now) {const dt=Math.min(.05,(now-game.last)/1000||0);game.last=now;update(dt);render();requestAnimationFrame(frame);}
   function loadSprites() {
@@ -223,17 +311,28 @@
       image.src=src;
     })));
   }
-  function inButton(e) {const r=canvas.getBoundingClientRect();const x=(e.clientX-r.left)*W/r.width,y=(e.clientY-r.top)*H/r.height;return x>=343&&x<=617&&y>=340&&y<=394;}
+  function inButton(e) {
+    const r=canvas.getBoundingClientRect(),x=(e.clientX-r.left)*W/r.width,y=(e.clientY-r.top)*H/r.height;
+    return x>=343&&x<=617&&(game.mode==='over'?y>=420&&y<=474:y>=340&&y<=394);
+  }
   window.addEventListener('keydown',e=>{
+    if(e.target===nicknameInput) return;
     if(['ArrowUp','ArrowDown',' '].includes(e.key)) e.preventDefault();
     audio();
+    if(e.key==='ArrowUp'||e.key===' ') jumpKeysDown.add(e.key);
     if(e.repeat)return;
     if(e.key==='ArrowUp'||e.key===' ') {game.jumpHeld=true;jump();}
     if(e.key==='ArrowDown')setCrouch(true);
     if(e.key.toLowerCase()==='m')game.muted=!game.muted;
   });
-  window.addEventListener('keyup',e=>{if(e.key==='ArrowDown')setCrouch(false);if(e.key==='ArrowUp'||e.key===' ')game.jumpHeld=false;});
-  window.addEventListener('blur',()=>{game.jumpHeld=false;setCrouch(false);});
+  window.addEventListener('keyup',e=>{
+    if(e.key==='ArrowDown')setCrouch(false);
+    if(e.key==='ArrowUp'||e.key===' ') {
+      jumpKeysDown.delete(e.key);
+      game.jumpHeld=jumpKeysDown.size>0;
+    }
+  });
+  window.addEventListener('blur',()=>{jumpKeysDown.clear();game.jumpHeld=false;setCrouch(false);});
   canvas.addEventListener('pointerdown',e=>{
     e.preventDefault();audio();canvas.setPointerCapture?.(e.pointerId);
     if(game.mode!=='playing') {
@@ -249,8 +348,10 @@
   canvas.addEventListener('pointerup',()=>setCrouch(false));
   canvas.addEventListener('pointercancel',()=>setCrouch(false));
   canvas.addEventListener('contextmenu',e=>e.preventDefault());
+  window.addEventListener('resize',syncNicknameControl);
+  loadLeaderboard();
   game.last=performance.now();requestAnimationFrame(frame);
-  loadSprites().then(()=>{game.assetsReady=true;game.mode='ready';}).catch(error=>{game.assetError=error.message;game.mode='asset-error';});
+  loadSprites().then(()=>{game.assetsReady=true;game.mode='ready';syncNicknameControl();}).catch(error=>{game.assetError=error.message;game.mode='asset-error';syncNicknameControl();});
 })();
 </script>
 </body>
