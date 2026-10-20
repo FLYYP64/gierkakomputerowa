@@ -67,6 +67,12 @@ app.post('/api/scores', (req, res) => {
 
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
+// Serve the game and its generated sprite assets from this same origin.
+app.use('/assets', express.static(path.join(__dirname, '..', 'assets')));
+app.get('/', (_req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'index.html'));
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Leaderboard API listening on port ${PORT}; database: ${DB_PATH}`);
 });
