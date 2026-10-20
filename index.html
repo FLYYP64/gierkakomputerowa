@@ -132,7 +132,7 @@
       const response=await fetch(API_URL,{
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({nickname:game.nickname,debt:Math.round(game.debt),distance:Math.round(game.distance)})
+        body:JSON.stringify({nickname:game.nickname,debt:Math.round(game.debt),distance:Math.round(game.distance),difficulty:game.difficulty})
       });
       if(!response.ok) throw new Error(`HTTP ${response.status}`);
       const refreshed=await loadLeaderboard();
@@ -366,18 +366,21 @@
     ctx.textAlign='left';ctx.font='bold 11px system-ui';ctx.fillStyle=game.boardPeriod==='all'?'#f1bf4e':'#b9c7c2';ctx.fillText('WSZECH CZASÓW',320,187);ctx.fillStyle=game.boardPeriod==='week'?'#f1bf4e':'#b9c7c2';ctx.fillText('OSTATNIE 7 DNI',460,187);
     ctx.fillStyle=game.boardSort==='distance'?'#f1bf4e':'#b9c7c2';ctx.fillText('DYSTANS',625,187);ctx.fillStyle=game.boardSort==='debt'?'#f1bf4e':'#b9c7c2';ctx.fillText('DŁUG',710,187);
     ctx.textAlign='left';ctx.fillStyle='#b9c7c2';ctx.font='bold 12px system-ui';
-    ctx.fillText('MIEJSCE',120,211);ctx.fillText('NICK',225,211);
-    ctx.textAlign='right';ctx.fillText('DŁUG',642,211);ctx.fillText('DYSTANS',825,211);
-    ctx.font='14px system-ui';
+    ctx.fillText('MIEJSCE',120,211);ctx.fillText('NICK',225,211);ctx.fillText('TRYB',455,211);
+    ctx.textAlign='right';ctx.fillText('DŁUG',685,211);ctx.fillText('DYSTANS',835,211);
+    ctx.font='13px system-ui';
     const rows=game.leaderboard.slice(0,5);
     rows.forEach((score,index)=>{
       const y=238+index*27;
       ctx.textAlign='left';ctx.fillStyle=index===0?'#f2bd4b':'#eee8d4';
       ctx.fillText(String(index+1).padStart(2,'0'),130,y);
-      ctx.fillText(cleanNickname(score.nickname),225,y);
+      ctx.fillText(cleanNickname(score.nickname),225,y,210);
+      ctx.textAlign='left';ctx.fillStyle='#b9c7c2';ctx.font='bold 10px system-ui';
+      ctx.fillText(difficulties[score.difficulty]?.label||'BRAK DANYCH',455,y,150);
       ctx.textAlign='right';
-      ctx.fillText(`$ ${Math.floor(Number(score.debt)||0).toLocaleString('pl-PL')}`,642,y);
-      ctx.fillText(`${Math.floor(Number(score.distance)||0).toLocaleString('pl-PL')} m`,825,y);
+      ctx.font='13px system-ui';ctx.fillStyle=index===0?'#f2bd4b':'#eee8d4';
+      ctx.fillText(`$ ${Math.floor(Number(score.debt)||0).toLocaleString('pl-PL')}`,685,y);
+      ctx.fillText(`${Math.floor(Number(score.distance)||0).toLocaleString('pl-PL')} m`,835,y);
     });
     if(!rows.length) {ctx.textAlign='center';ctx.fillStyle='#eee8d4';ctx.fillText(game.leaderboardMessage||'Brak wyników.',W/2,258);}
     else if(game.leaderboardMessage) {ctx.textAlign='center';ctx.fillStyle='#b9c7c2';ctx.font='12px system-ui';ctx.fillText(game.leaderboardMessage,W/2,385);}
