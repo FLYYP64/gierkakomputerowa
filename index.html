@@ -46,7 +46,7 @@
     {id:'dollar',label:'Zbierz 2 dolary',goal:2},
     {id:'sausage',label:'Zdobądź kiełbasę',goal:1}
   ];
-  const game = { mode:'loading', last:0, elapsed:0, distance:0, debt:0, speed:330, spawn:1.2, obstacles:[], pickups:[], particles:[], shake:0, sound:null, muted:false, volume:.65, jumpHeld:false, assetsReady:false, assetError:'', nickname:'Anonim', scoreSubmitted:false, leaderboard:[], leaderboardMessage:'Ładowanie rekordów…', difficulty:'normal', boardSort:'distance', boardPeriod:'all', mission:null, missionProgress:0, missionDone:false, dodged:0, message:'', messageTime:0, scenery:'osiedle', pauseFrom:'playing', bestDistance:0, achievementNotice:'', settingsOpen:false };
+  const game = { mode:'loading', last:0, elapsed:0, distance:0, debt:0, speed:330, spawn:1.2, obstacles:[], pickups:[], particles:[], shake:0, sound:null, muted:false, volume:.65, jumpHeld:false, assetsReady:false, assetError:'', nickname:'Anonim', scoreSubmitted:false, leaderboard:[], leaderboardMessage:'Ładowanie rekordów…', difficulty:'normal', boardSort:'distance', boardPeriod:'all', mission:null, missionProgress:0, missionDone:false, missionsCompleted:0, nextMissionDistance:0, dodged:0, message:'', messageTime:0, scenery:'osiedle', pauseFrom:'playing', bestDistance:0, achievementNotice:'', settingsOpen:false };
   const jumpKeysDown = new Set();
   const player = { x:145, y:GROUND-86, w:54, h:86, vy:0, lives:3, grounded:true, crouch:false, invuln:0, shield:0, boost:0, doubleJump:false, blink:0 };
   const clouds = Array.from({length:6},()=>({x:rand(0,W),y:rand(45,170),s:rand(.7,1.5)}));
@@ -54,7 +54,8 @@
   const spriteFiles = {
     gierek:'assets/gierek.png', nysa:'assets/nysa.png', fiat:'assets/fiat.png',
     stork:'assets/bocian.png', worker:'assets/robotnik.png', orange:'assets/pomarancza.png',
-    dollar:'assets/dolar.png', sausage:'assets/kielbasa.png', background:'assets/wielka_plyta.jpg'
+    dollar:'assets/dolar.png', sausage:'assets/kielbasa.png', tank:'assets/tank.png',
+    queue:'assets/queue.png', pothole:'assets/pothole.png', background:'assets/wielka_plyta.jpg'
   };
   try { nicknameInput.value=localStorage.getItem('last_nickname')||'Anonim'; }
   catch { nicknameInput.value='Anonim'; }
@@ -150,7 +151,7 @@
     try {localStorage.setItem('last_nickname',game.nickname);} catch {}
     game.scoreSubmitted=false;
     game.mode='playing';syncNicknameControl(); game.elapsed=0; game.distance=0; game.debt=0; game.speed=330; game.spawn=.9;
-    game.mission=missions[Math.floor(Math.random()*missions.length)];game.missionProgress=0;game.missionDone=false;game.dodged=0;game.message='';game.messageTime=0;game.scenery='osiedle';
+    game.mission=missions[Math.floor(Math.random()*missions.length)];game.missionProgress=0;game.missionDone=false;game.missionsCompleted=0;game.nextMissionDistance=0;game.dodged=0;game.message='';game.messageTime=0;game.achievementNotice='';game.scenery='osiedle';
     game.obstacles=[]; game.pickups=[]; game.particles=[]; game.shake=0;
     Object.assign(player,{y:GROUND-86,vy:0,lives:3,grounded:true,crouch:false,invuln:0,shield:0,boost:0,doubleJump:false,blink:0});
     game.last=performance.now(); audio();
@@ -166,7 +167,7 @@
   function spawnObstacle() {
     const roll=Math.random(); let type;
     if(roll<.18) type='nysa'; else if(roll<.33) type='fiat'; else if(roll<.49) type='stork'; else if(roll<.62) type='worker'; else if(roll<.73) type='queue'; else if(roll<.83) type='pothole'; else if(roll<.92) type='tank'; else type='rubin';
-    const dims={nysa:[98,59],fiat:[108,54],stork:[94,43],worker:[66,100],queue:[110,88],pothole:[85,28],tank:[124,67],rubin:[58,78]}[type];
+    const dims={nysa:[98,59],fiat:[108,54],stork:[94,43],worker:[66,100],queue:[132,95],pothole:[116,47],tank:[142,72],rubin:[58,78]}[type];
     game.obstacles.push({type,x:W+30,y: type==='stork'?GROUND-116:GROUND-dims[1],w:dims[0],h:dims[1],passed:false});
     if(Math.random()<.64) {
       const kind=['orange','dollar','sausage'][Math.floor(Math.random()*3)];
@@ -183,7 +184,11 @@
   function addMissionProgress(id,amount=1) {
     if(!game.mission||game.mission.id!==id||game.missionDone)return;
     game.missionProgress=Math.min(game.mission.goal,game.missionProgress+amount);
-    if(game.missionProgress>=game.mission.goal) {game.missionDone=true;game.debt=Math.max(0,game.debt-100000);toast('MISJA WYKONANA! Premia: $100 000');sound('mission');}
+    if(game.missionProgress>=game.mission.goal) {
+      game.missionDone=true;game.missionsCompleted++;game.mission=null;game.missionProgress=0;
+      game.debt+=100000;game.nextMissionDistance=game.distance+rand(2000,3001);
+      toast('MISJA WYKONANA! Dług +$100 000');sound('mission');
+    }
   }
   function unlockAchievement(id,label) {
     let unlocked=[];try{unlocked=JSON.parse(localStorage.getItem('gierka_achievements')||'[]');}catch{}
@@ -199,7 +204,7 @@
       game.bestDistance=Math.max(game.bestDistance,Math.floor(game.distance));
       if(game.distance>=1000)unlockAchievement('marathon','TOWARZYSZ MARATONU');
       if(game.dodged>=20)unlockAchievement('evasive','MISTRZ UNIKÓW');
-      if(game.missionDone)unlockAchievement('mission','PRZODOWNIK PRACY');
+      if(game.missionsCompleted>0)unlockAchievement('mission','PRZODOWNIK PRACY');
       void submitScore();
     }
   }
@@ -216,6 +221,10 @@
     if(game.mission?.id==='distance')addMissionProgress('distance',game.speed*dt/12);
     game.messageTime=Math.max(0,game.messageTime-dt);
     const sceneryIndex=Math.floor(game.distance/650)%4;game.scenery=['osiedle','stocznia','kopalnia','centrum'][sceneryIndex];
+    if(!game.mission&&game.nextMissionDistance>0&&game.distance>=game.nextMissionDistance) {
+      game.mission=missions[Math.floor(Math.random()*missions.length)];game.missionProgress=0;game.missionDone=false;game.nextMissionDistance=0;
+      toast('NOWA MISJA!');
+    }
     player.vy+=1950*dt; player.y+=player.vy*dt;
     if(player.y>=GROUND-86) {
       player.y=GROUND-86;player.vy=0;player.grounded=true;
@@ -228,14 +237,17 @@
     for(let i=game.obstacles.length-1;i>=0;i--) {
       const o=game.obstacles[i];
       let ob={x:o.x+15,y:o.y+12,w:o.w-30,h:o.h-20};
-      // The stork flies at head height: its collision band overlaps a standing
-      // player, but ends just above the crouching hitbox.
-      if(o.type==='stork') ob={x:o.x+17,y:o.y+42,w:o.w-34,h:26};
+      // The stork spans the jumping lane; its special rule below makes crouching
+      // on the ground the only safe way through it.
+      if(o.type==='stork') ob={x:o.x+5,y:o.y-4,w:o.w-10,h:o.h+45};
       if(o.type==='pothole') ob={x:o.x+4,y:o.y+6,w:o.w-8,h:o.h-6};
       if(o.type==='queue') ob={x:o.x+15,y:o.y+22,w:o.w-30,h:o.h-24};
       if(o.type==='tank') ob={x:o.x+14,y:o.y+20,w:o.w-25,h:o.h-23};
       if(o.type==='rubin') ob={x:o.x+12,y:o.y+15,w:o.w-24,h:o.h-18};
-      if(boxes(pb,ob)&&!o.hit) {o.hit=true;takeHit();}
+      const hitStork=o.type==='stork'
+        && pb.x<ob.x+ob.w && pb.x+pb.w>ob.x
+        && !(player.crouch&&player.grounded);
+      if((o.type==='stork'?hitStork:boxes(pb,ob))&&!o.hit) {o.hit=true;takeHit();}
       if(!o.passed&&o.x+o.w<player.x) {o.passed=true;if(!o.hit){game.dodged++;addMissionProgress('dodge');if(game.dodged===5)unlockAchievement('first_five','PIĘĆ PRZESZKÓD Z GŁOWY');}}
       if(o.x+o.w<=-40) game.obstacles.splice(i,1);
     }
@@ -356,11 +368,15 @@
     if(!rows.length) {ctx.textAlign='center';ctx.fillStyle='#eee8d4';ctx.fillText(game.leaderboardMessage||'Brak wyników.',W/2,258);}
     else if(game.leaderboardMessage) {ctx.textAlign='center';ctx.fillStyle='#b9c7c2';ctx.font='12px system-ui';ctx.fillText(game.leaderboardMessage,W/2,385);}
     let earned=[];try{earned=JSON.parse(localStorage.getItem('gierka_achievements')||'[]');}catch{}
-    ctx.textAlign='center';ctx.fillStyle=game.missionDone?'#f1bf4e':'#b9c7c2';ctx.font='11px system-ui';ctx.fillText(`MISJA: ${game.mission?.label||'—'} · ${game.missionDone?'WYKONANA':'niewykonana'}`,W/2,367);
+    const missionSummary=game.mission
+      ? `MISJA: ${game.mission.label} · ${game.missionDone?'WYKONANA':'niewykonana'}`
+      : `MISJE WYKONANE: ${game.missionsCompleted}`;
+    ctx.textAlign='center';ctx.fillStyle=game.missionsCompleted>0?'#f1bf4e':'#b9c7c2';ctx.font='11px system-ui';ctx.fillText(missionSummary,W/2,367);
     ctx.fillStyle='#b9c7c2';ctx.fillText(`OSIĄGNIĘCIA: ${earned.length?earned.length+' odblokowane':'jeszcze brak — spróbuj ponownie!'}`,W/2,400);
     if(game.achievementNotice){ctx.fillStyle='#f1bf4e';ctx.fillText(`NOWE: ${game.achievementNotice}`,W/2,414);}
-    rect(343,432,274,54,'#d95143');rect(349,438,262,42,'#efb847');
-    ctx.textAlign='center';ctx.fillStyle='#27363b';ctx.font='900 17px system-ui';ctx.fillText('ZAGRAJ PONOWNIE',W/2,465);
+    rect(190,432,280,54,'#d95143');rect(196,438,268,42,'#efb847');
+    rect(490,432,280,54,'#52747a');rect(496,438,268,42,'#d3d5b5');
+    ctx.textAlign='center';ctx.fillStyle='#27363b';ctx.font='900 15px system-ui';ctx.fillText('ZAGRAJ PONOWNIE',330,465);ctx.fillText('WYBIERZ POZIOM',630,465);
     ctx.textAlign='left';
   }
   function drawReadyPanel() {
@@ -404,11 +420,16 @@
   }
   function pointerPoint(e) {const r=canvas.getBoundingClientRect();return {x:(e.clientX-r.left)*W/r.width,y:(e.clientY-r.top)*H/r.height};}
   function pauseGame() {if(game.mode==='playing'){game.mode='paused';setCrouch(false);game.jumpHeld=false;}else if(game.mode==='paused')game.mode='playing';}
+  function returnToMenu() {
+    game.mode='ready';game.elapsed=0;game.distance=0;game.debt=0;game.obstacles=[];game.pickups=[];game.particles=[];game.shake=0;game.achievementNotice='';
+    Object.assign(player,{y:GROUND-86,vy:0,lives:3,grounded:true,crouch:false,invuln:0,shield:0,boost:0,doubleJump:false,blink:0});
+    syncNicknameControl();
+  }
   window.addEventListener('keydown',e=>{
     if(e.target===nicknameInput) return;
     if(['ArrowUp','ArrowDown',' ','Escape'].includes(e.key)) e.preventDefault();
     audio();
-    if(e.key==='Escape'){pauseGame();return;}
+    if(e.key==='Escape'){if(game.mode==='over')returnToMenu();else pauseGame();return;}
     if(e.key==='+'||e.key==='='){game.volume=clamp(game.volume+.1,0,1);saveSettings();return;}
     if(e.key==='-'||e.key==='_'){game.volume=clamp(game.volume-.1,0,1);saveSettings();return;}
     if(e.key==='ArrowUp'||e.key===' ') jumpKeysDown.add(e.key);
@@ -440,7 +461,8 @@
         if(x>=305&&x<450)game.boardPeriod='all';else if(x>=450&&x<590)game.boardPeriod='week';else if(x>=590&&x<700)game.boardSort='distance';else if(x>=700&&x<775)game.boardSort='debt';
         void loadLeaderboard();return;
       }
-      if(x>=343&&x<=617&&y>=432&&y<=486){reset();return;}
+      if(y>=432&&y<=486&&x>=190&&x<=470){reset();return;}
+      if(y>=432&&y<=486&&x>=490&&x<=770){returnToMenu();return;}
       return;
     }
     if(game.mode!=='playing') {
