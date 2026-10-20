@@ -55,7 +55,13 @@
     gierek:'assets/gierek.png', nysa:'assets/nysa.png', fiat:'assets/fiat.png',
     stork:'assets/bocian.png', worker:'assets/robotnik.png', orange:'assets/pomarancza.png',
     dollar:'assets/dolar.png', sausage:'assets/kielbasa.png', tank:'assets/tank.png',
-    queue:'assets/queue.png', pothole:'assets/pothole.png', background:'assets/wielka_plyta.jpg'
+    queue:'assets/queue.png', pothole:'assets/pothole.png',
+    background:'assets/background_osiedle.jpg',
+    backgroundFactory:'assets/background_factory.jpg',
+    backgroundBW:'assets/background_bw.jpg',
+    backgroundLong:'assets/background_block_long.jpg',
+    backgroundColor:'assets/background_color.jpg',
+    backgroundLowrise:'assets/background_lowrise.jpg'
   };
   try { nicknameInput.value=localStorage.getItem('last_nickname')||'Anonim'; }
   catch { nicknameInput.value='Anonim'; }
@@ -220,7 +226,7 @@
     game.debt+=dt*(3200+game.elapsed*82)*diff.debt; player.boost=Math.max(0,player.boost-dt); player.shield=Math.max(0,player.shield-dt); player.invuln=Math.max(0,player.invuln-dt); player.blink+=dt;
     if(game.mission?.id==='distance')addMissionProgress('distance',game.speed*dt/12);
     game.messageTime=Math.max(0,game.messageTime-dt);
-    const sceneryIndex=Math.floor(game.distance/650)%4;game.scenery=['osiedle','stocznia','kopalnia','centrum'][sceneryIndex];
+    const sceneryIndex=Math.floor(game.distance/650)%6;game.scenery=['osiedle','fabryka','blokowisko_bw','blokowisko_long','centrum','osiedle_niskie'][sceneryIndex];
     if(!game.mission&&game.nextMissionDistance>0&&game.distance>=game.nextMissionDistance) {
       game.mission=missions[Math.floor(Math.random()*missions.length)];game.missionProgress=0;game.missionDone=false;game.nextMissionDistance=0;
       toast('NOWA MISJA!');
@@ -274,12 +280,20 @@
     // Sun and soft pixel clouds
     ctx.fillStyle='#ffe7a0';ctx.beginPath();ctx.arc(790,103,39,0,Math.PI*2);ctx.fill();
     for(const c of clouds) {const x=((c.x-game.distance*.17)%(W+180)+W+180)%(W+180)-70; const s=c.s;rect(x,c.y,75*s,19*s,'#f4f0dc');rect(x+15*s,c.y-12*s,42*s,14*s,'#f4f0dc');rect(x+66*s,c.y+5*s,26*s,13*s,'#f4f0dc');}
-    // The first region uses the supplied photo; later regions use original Canvas art.
-    if(game.scenery==='osiedle'&&sprites.background) {
-      const img=sprites.background, sourceY=img.naturalHeight*.24, sourceH=img.naturalHeight-sourceY;
-      const offset=(game.distance*.12)%W, y=GROUND-250;
-      ctx.drawImage(img,0,sourceY,img.naturalWidth,sourceH,-offset,y,W,250);
-      ctx.drawImage(img,0,sourceY,img.naturalWidth,sourceH,W-offset,y,W,250);
+    // Each district uses a prepared, seamless panoramic strip from the supplied photos.
+    const sceneBackgrounds={
+      osiedle:sprites.background,
+      fabryka:sprites.backgroundFactory,
+      blokowisko_bw:sprites.backgroundBW,
+      blokowisko_long:sprites.backgroundLong,
+      centrum:sprites.backgroundColor,
+      osiedle_niskie:sprites.backgroundLowrise
+    };
+    const sceneImage=sceneBackgrounds[game.scenery];
+    if(sceneImage) {
+      const offset=(game.distance*.32)%sceneImage.naturalWidth, y=GROUND-250;
+      ctx.drawImage(sceneImage,-offset,y);
+      ctx.drawImage(sceneImage,sceneImage.naturalWidth-offset,y);
     } else {
       const colors={stocznia:['#627d86','#496a73'],kopalnia:['#586c64','#3e554d'],centrum:['#9a8a72','#716657']}[game.scenery]||['#718d83','#536d65'];
       rect(0,GROUND-220,W,220,colors[0]);
