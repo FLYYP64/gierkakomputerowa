@@ -31,16 +31,19 @@ app.use(express.json({ limit: '8kb' }));
 
 app.get('/api/scores', (req, res) => {
   const sort = req.query.sort === 'debt' ? 'debt' : 'distance';
+  const period = req.query.period === 'week' ? 'week' : 'all';
   const orderBy = sort === 'debt'
     ? 'debt DESC, distance DESC'
     : 'distance DESC, debt ASC';
+  const periodFilter = period === 'week' ? "WHERE created_at >= datetime('now', '-7 days')" : '';
   const scores = db.prepare(`
     SELECT id, nickname, debt, distance, created_at
     FROM scores
+    ${periodFilter}
     ORDER BY ${orderBy}, created_at ASC
     LIMIT 10
   `).all();
-  res.json(scores);
+  res.json({ scores, sort, period });
 });
 
 app.post('/api/scores', (req, res) => {
