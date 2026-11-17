@@ -20,6 +20,8 @@ db.exec(`
     debt REAL NOT NULL CHECK(debt >= 0),
     distance REAL NOT NULL CHECK(distance >= 0),
     difficulty TEXT NOT NULL DEFAULT 'unknown' CHECK(difficulty IN ('easy', 'normal', 'hard', 'unknown')),
+    game_mode TEXT NOT NULL DEFAULT 'runner',
+    flight_score INTEGER NOT NULL DEFAULT 0 CHECK(flight_score >= 0),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
   CREATE INDEX IF NOT EXISTS scores_distance_idx ON scores(distance DESC);
@@ -31,39 +33,56 @@ const scoreColumns = db.pragma('table_info(scores)');
 if (!scoreColumns.some((column) => column.name === 'difficulty')) {
   db.exec("ALTER TABLE scores ADD COLUMN difficulty TEXT NOT NULL DEFAULT 'unknown' CHECK(difficulty IN ('easy', 'normal', 'hard', 'unknown'))");
 }
+if (!scoreColumns.some((column) => column.name === 'game_mode')) {
+  db.exec("ALTER TABLE scores ADD COLUMN game_mode TEXT NOT NULL DEFAULT 'runner'");
+}
+if (!scoreColumns.some((column) => column.name === 'flight_score')) {
+  db.exec('ALTER TABLE scores ADD COLUMN flight_score INTEGER NOT NULL DEFAULT 0');
+}
 
 const app = express();
 app.use(cors({ origin: CORS_ORIGIN === '*' ? '*' : CORS_ORIGIN.split(',').map((s) => s.trim()) }));
 app.use(express.json({ limit: '8kb' }));
 
 app.get('/api/scores', (req, res) => {
+  const gameMode = req.query.mode === 'flight' ? 'flight' : 'runner';
   const sort = req.query.sort === 'debt' ? 'debt' : 'distance';
   const period = req.query.period === 'week' ? 'week' : 'all';
-  const orderBy = sort === 'debt'
-    ? 'debt DESC, distance DESC'
-    : 'distance DESC, debt ASC';
-  const periodFilter = period === 'week' ? "WHERE created_at >= datetime('now', '-7 days')" : '';
+  const orderBy = gameMode === 'flight'
+    ? 'flight_score DESC, created_at ASC'
+    : sort === 'debt' ? 'debt DESC, distance DESC' : 'distance DESC, debt ASC';
+  const periodFilter = period === 'week'
+    ? "WHERE game_mode = ? AND created_at >= datetime('now', '-7 days')"
+    : 'WHERE game_mode = ?';
   const scores = db.prepare(`
-    SELECT id, nickname, debt, distance, difficulty, created_at
+    SELECT id, nickname, debt, distance, difficulty, game_mode, flight_score, created_at
     FROM scores
     ${periodFilter}
     ORDER BY ${orderBy}, created_at ASC
     LIMIT 10
-  `).all();
-  res.json({ scores, sort, period });
+  `).all(gameMode);
+  res.json({ scores, sort, period, gameMode });
 });
 
 app.post('/api/scores', (req, res) => {
   const nickname = typeof req.body?.nickname === 'string' ? req.body.nickname.trim() : '';
   const { debt, distance } = req.body || {};
+  const gameMode = req.body?.gameMode ?? 'runner';
+  const flightScore = req.body?.flightScore;
   const difficulty = req.body?.difficulty ?? 'normal';
   if (!nickname || nickname.length > 24) {
     return res.status(400).json({ error: 'nickname must contain 1–24 characters' });
   }
-  if (typeof debt !== 'number' || !Number.isFinite(debt) || debt < 0) {
+  if (!['runner', 'flight'].includes(gameMode)) {
+    return res.status(400).json({ error: 'gameMode must be runner or flight' });
+  }
+  if (gameMode === 'flight' && (!Number.isInteger(flightScore) || flightScore < 0)) {
+    return res.status(400).json({ error: 'flightScore must be a non-negative integer' });
+  }
+  if (gameMode === 'runner' && (typeof debt !== 'number' || !Number.isFinite(debt) || debt < 0)) {
     return res.status(400).json({ error: 'debt must be a non-negative number' });
   }
-  if (typeof distance !== 'number' || !Number.isFinite(distance) || distance < 0) {
+  if (gameMode === 'runner' && (typeof distance !== 'number' || !Number.isFinite(distance) || distance < 0)) {
     return res.status(400).json({ error: 'distance must be a non-negative number' });
   }
   if (!['easy', 'normal', 'hard'].includes(difficulty)) {
@@ -71,10 +90,10 @@ app.post('/api/scores', (req, res) => {
   }
 
   const result = db.prepare(
-    'INSERT INTO scores (nickname, debt, distance, difficulty) VALUES (?, ?, ?, ?)'
-  ).run(nickname, debt, distance, difficulty);
+    'INSERT INTO scores (nickname, debt, distance, difficulty, game_mode, flight_score) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(nickname, gameMode === 'runner' ? debt : 0, gameMode === 'runner' ? distance : 0, difficulty, gameMode, gameMode === 'flight' ? flightScore : 0);
   const score = db.prepare(
-    'SELECT id, nickname, debt, distance, difficulty, created_at FROM scores WHERE id = ?'
+    'SELECT id, nickname, debt, distance, difficulty, game_mode, flight_score, created_at FROM scores WHERE id = ?'
   ).get(result.lastInsertRowid);
   return res.status(201).json(score);
 });

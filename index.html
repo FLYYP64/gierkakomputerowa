@@ -46,7 +46,7 @@
     {id:'dollar',label:'Zbierz 2 dolary',goal:2},
     {id:'sausage',label:'Zdobądź kiełbasę',goal:1}
   ];
-  const game = { mode:'loading', last:0, elapsed:0, distance:0, debt:0, speed:330, spawn:1.2, obstacles:[], pickups:[], particles:[], shake:0, sound:null, muted:false, volume:.65, jumpHeld:false, assetsReady:false, assetError:'', nickname:'Anonim', scoreSubmitted:false, leaderboard:[], leaderboardMessage:'Ładowanie rekordów…', difficulty:'normal', boardSort:'distance', boardPeriod:'all', mission:null, missionProgress:0, missionDone:false, missionsCompleted:0, nextMissionDistance:0, dodged:0, message:'', messageTime:0, scenery:'osiedle', pauseFrom:'playing', bestDistance:0, achievementNotice:'', settingsOpen:false };
+  const game = { mode:'loading', gameType:'runner', last:0, elapsed:0, distance:0, debt:0, speed:330, spawn:1.2, obstacles:[], pickups:[], particles:[], shake:0, sound:null, muted:false, volume:.65, jumpHeld:false, assetsReady:false, assetError:'', nickname:'Anonim', scoreSubmitted:false, leaderboard:[], leaderboardMessage:'Ładowanie rekordów…', difficulty:'normal', boardSort:'distance', boardPeriod:'all', flightY:250, flightVelocity:0, flightPipes:[], flightSpawn:0, flightScore:0, mission:null, missionProgress:0, missionDone:false, missionsCompleted:0, nextMissionDistance:0, dodged:0, message:'', messageTime:0, scenery:'osiedle', pauseFrom:'playing', bestDistance:0, achievementNotice:'', settingsOpen:false };
   const jumpKeysDown = new Set();
   const player = { x:145, y:GROUND-86, w:54, h:86, vy:0, lives:3, grounded:true, crouch:false, invuln:0, shield:0, boost:0, doubleJump:false, blink:0 };
   const clouds = Array.from({length:6},()=>({x:rand(0,W),y:rand(45,170),s:rand(.7,1.5)}));
@@ -111,7 +111,7 @@
   function cleanNickname(value) { return String(value||'').trim().slice(0,24)||'Anonim'; }
   async function loadLeaderboard() {
     try {
-      const response=await fetch(`${API_URL}?sort=${game.boardSort}&period=${game.boardPeriod}`,{headers:{Accept:'application/json'}});
+      const response=await fetch(`${API_URL}?mode=${game.gameType}&sort=${game.boardSort}&period=${game.boardPeriod}`,{headers:{Accept:'application/json'}});
       if(!response.ok) throw new Error(`HTTP ${response.status}`);
       const data=await response.json();
       const rows=Array.isArray(data)?data:data?.scores;
@@ -132,7 +132,9 @@
       const response=await fetch(API_URL,{
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({nickname:game.nickname,debt:Math.round(game.debt),distance:Math.round(game.distance),difficulty:game.difficulty})
+        body:JSON.stringify(game.gameType==='flight'
+          ? {nickname:game.nickname,gameMode:'flight',flightScore:game.flightScore,difficulty:game.difficulty}
+          : {nickname:game.nickname,gameMode:'runner',debt:Math.round(game.debt),distance:Math.round(game.distance),difficulty:game.difficulty})
       });
       if(!response.ok) throw new Error(`HTTP ${response.status}`);
       const refreshed=await loadLeaderboard();
@@ -148,7 +150,7 @@
     if(!visible) return;
     const bounds=canvas.getBoundingClientRect();
     nicknameControl.style.left=`${bounds.left+bounds.width/2}px`;
-    nicknameControl.style.top=`${bounds.top+bounds.height*.56}px`;
+    nicknameControl.style.top=`${bounds.top+bounds.height*.71}px`;
   }
   function reset() {
     if(!game.assetsReady) return;
@@ -157,6 +159,7 @@
     try {localStorage.setItem('last_nickname',game.nickname);} catch {}
     game.scoreSubmitted=false;
     game.mode='playing';syncNicknameControl(); game.elapsed=0; game.distance=0; game.debt=0; game.speed=330; game.spawn=.9;
+    game.flightY=250;game.flightVelocity=0;game.flightPipes=[];game.flightSpawn=.75;game.flightScore=0;
     game.mission=missions[Math.floor(Math.random()*missions.length)];game.missionProgress=0;game.missionDone=false;game.missionsCompleted=0;game.nextMissionDistance=0;game.dodged=0;game.message='';game.messageTime=0;game.achievementNotice='';game.scenery='osiedle';
     game.obstacles=[]; game.pickups=[]; game.particles=[]; game.shake=0;
     Object.assign(player,{y:GROUND-86,vy:0,lives:3,grounded:true,crouch:false,invuln:0,shield:0,boost:0,doubleJump:false,blink:0});
@@ -166,6 +169,7 @@
     if(!game.assetsReady) return;
     if(game.mode==='ready') {reset();return;}
     if(game.mode!=='playing') return;
+    if(game.gameType==='flight') {game.flightVelocity=-430;sound('jump');return;}
     if(player.grounded) { player.vy=-770; player.grounded=false; sound('jump'); }
     else if(player.doubleJump) { player.vy=-690; player.doubleJump=false; sound('jump'); burst(player.x+25,player.y+player.h,'#f7d86a',8); }
   }
@@ -222,6 +226,7 @@
   }
   function update(dt) {
     if(game.mode!=='playing') return;
+    if(game.gameType==='flight') {updateFlight(dt);return;}
     game.elapsed+=dt;const diff=difficulties[game.difficulty]||difficulties.normal;game.distance+=game.speed*dt/12; game.speed=(Math.min(650,330+game.elapsed*5.2)+(player.boost>0?105:0))*diff.speed;
     game.debt+=dt*(3200+game.elapsed*82)*diff.debt; player.boost=Math.max(0,player.boost-dt); player.shield=Math.max(0,player.shield-dt); player.invuln=Math.max(0,player.invuln-dt); player.blink+=dt;
     if(game.mission?.id==='distance')addMissionProgress('distance',game.speed*dt/12);
@@ -267,6 +272,36 @@
       if(p.life<=0) game.particles.splice(i,1);
     }
     game.shake=Math.max(0,game.shake-dt*32);
+  }
+
+  function endFlight() {
+    if(game.mode!=='playing')return;
+    game.mode='over';syncNicknameControl();sound('over');void submitScore();
+  }
+  function updateFlight(dt) {
+    const diff=difficulties[game.difficulty]||difficulties.normal;
+    game.elapsed+=dt;
+    game.distance+=230*dt/12;
+    game.scenery='fabryka';
+    game.flightVelocity+=1280*dt;
+    game.flightY+=game.flightVelocity*dt;
+    game.flightSpawn-=dt;
+    const speed=(245+game.elapsed*2.4)*diff.speed;
+    const gap=(game.difficulty==='easy'?194:game.difficulty==='hard'?145:168);
+    if(game.flightSpawn<=0) {
+      const gapY=rand(135,GROUND-115);
+      game.flightPipes.push({x:W+25,w:86,gapY,gap,passed:false});
+      game.flightSpawn=1.62*Math.max(.77,245/speed);
+    }
+    const bird={x:142,y:game.flightY-17,w:58,h:36};
+    if(game.flightY<38||game.flightY>GROUND-28){endFlight();return;}
+    for(let i=game.flightPipes.length-1;i>=0;i--) {
+      const p=game.flightPipes[i];p.x-=speed*dt;
+      const overlaps=bird.x<p.x+p.w&&bird.x+bird.w>p.x;
+      if(overlaps&&(bird.y<p.gapY-p.gap/2||bird.y+bird.h>p.gapY+p.gap/2)){endFlight();return;}
+      if(!p.passed&&p.x+p.w<bird.x){p.passed=true;game.flightScore++;sound('mission');}
+      if(p.x+p.w< -20)game.flightPipes.splice(i,1);
+    }
   }
 
   function rect(x,y,w,h,color) {ctx.fillStyle=color;ctx.fillRect(Math.round(x),Math.round(y),Math.round(w),Math.round(h));}
@@ -348,6 +383,24 @@
     ctx.textAlign='right';ctx.fillStyle='#d4d0bd';ctx.font='bold 12px system-ui';ctx.fillText(game.muted?'DŹWIĘK: OFF [M]':'DŹWIĘK: ON [M]',920,38);ctx.fillText('PAUZA [ESC]',920,62);ctx.textAlign='left';
     if(game.mission) {rect(325,87,310,29,'rgba(20,39,48,.8)');ctx.fillStyle=game.missionDone?'#f1bf4e':'#eee8d4';ctx.font='bold 11px system-ui';const progress=game.mission.id==='distance'?Math.floor(game.missionProgress):game.missionProgress;ctx.fillText(`MISJA: ${game.mission.label}  ${progress}/${game.mission.goal}`,336,106);}
   }
+  function drawFlightWorld() {
+    for(const p of game.flightPipes) {
+      const top=p.gapY-p.gap/2,bottom=p.gapY+p.gap/2;
+      rect(p.x,0,p.w,top,'#526b4c');rect(p.x-7,top-12,p.w+14,15,'#d5ae55');
+      rect(p.x,bottom,p.w,H-bottom,'#526b4c');rect(p.x-7,bottom-3,p.w+14,15,'#d5ae55');
+      rect(p.x+12,18,p.w-24,Math.max(0,top-36),'rgba(30,45,38,.24)');
+      if(bottom<H-15)rect(p.x+12,bottom+30,p.w-24,Math.max(0,H-bottom-48),'rgba(30,45,38,.24)');
+      ctx.fillStyle='#263b43';ctx.font='bold 10px system-ui';ctx.textAlign='center';ctx.fillText('BUDOWA',p.x+p.w/2,Math.max(14,top-20));ctx.textAlign='left';
+    }
+    const bob=Math.sin(game.elapsed*8)*3;
+    if(sprites.stork)drawContain(sprites.stork,112,game.flightY-30+bob,92,52);
+    if(sprites.gierek)drawContain(sprites.gierek,148,game.flightY-24+bob,28,40);
+    rect(18,16,924,63,'rgba(20,39,48,.83)');
+    ctx.fillStyle='#f1bf4e';ctx.font='bold 15px system-ui';ctx.fillText('LOT DEKADY',34,41);
+    ctx.fillStyle='#fff1c9';ctx.font='bold 25px ui-monospace,monospace';ctx.fillText(`${game.flightScore} przelotów`,34,68);
+    ctx.fillStyle='#eee8d4';ctx.font='bold 13px system-ui';ctx.fillText('SPACJA / KLIK — MACHNIJ SKRZYDŁAMI',365,53);
+    ctx.textAlign='right';ctx.fillStyle='#d4d0bd';ctx.font='bold 12px system-ui';ctx.fillText(game.muted?'DŹWIĘK: OFF [M]':'DŹWIĘK: ON [M]',920,38);ctx.fillText('PAUZA [ESC]',920,62);ctx.textAlign='left';
+  }
   function panel(title,lines,button) {
     ctx.fillStyle='rgba(14,27,34,.74)';ctx.fillRect(0,0,W,H);
     rect(185,115,590,315,'#e1bf78');rect(193,123,574,299,'#263b43');
@@ -359,15 +412,16 @@
   function drawGameOverPanel() {
     ctx.fillStyle='rgba(14,27,34,.78)';ctx.fillRect(0,0,W,H);
     rect(72,28,816,484,'#e1bf78');rect(80,36,800,468,'#263b43');
-    ctx.textAlign='center';ctx.fillStyle='#ffe2a0';ctx.font='900 31px system-ui';ctx.fillText('DOSYĆ TYCH GIEREK',W/2,84);
+    ctx.textAlign='center';ctx.fillStyle='#ffe2a0';ctx.font='900 31px system-ui';ctx.fillText(game.gameType==='flight'?'KONIEC LOTU DEKADY':'DOSYĆ TYCH GIEREK',W/2,84);
     ctx.fillStyle='#eee8d4';ctx.font='bold 16px system-ui';
-    ctx.fillText(`Dług końcowy: $ ${Math.floor(game.debt).toLocaleString('pl-PL')}   ·   Dystans: ${Math.floor(game.distance)} m`,W/2,121);
-    ctx.fillStyle='#f1bf4e';ctx.font='900 18px system-ui';ctx.fillText('TOP 5 NAJLEPSZYCH WYNIKÓW',W/2,165);
+    ctx.fillText(game.gameType==='flight'?`Bramki pokonane: ${game.flightScore}`:`Dług końcowy: $ ${Math.floor(game.debt).toLocaleString('pl-PL')}   ·   Dystans: ${Math.floor(game.distance)} m`,W/2,121);
+    ctx.fillStyle='#f1bf4e';ctx.font='900 18px system-ui';ctx.fillText(game.gameType==='flight'?'TOP 5 LOTNIKÓW DEKADY':'TOP 5 NAJLEPSZYCH WYNIKÓW',W/2,165);
     ctx.textAlign='left';ctx.font='bold 11px system-ui';ctx.fillStyle=game.boardPeriod==='all'?'#f1bf4e':'#b9c7c2';ctx.fillText('WSZECH CZASÓW',320,187);ctx.fillStyle=game.boardPeriod==='week'?'#f1bf4e':'#b9c7c2';ctx.fillText('OSTATNIE 7 DNI',460,187);
-    ctx.fillStyle=game.boardSort==='distance'?'#f1bf4e':'#b9c7c2';ctx.fillText('DYSTANS',625,187);ctx.fillStyle=game.boardSort==='debt'?'#f1bf4e':'#b9c7c2';ctx.fillText('DŁUG',710,187);
+    if(game.gameType==='flight') {ctx.fillStyle='#f1bf4e';ctx.fillText('WYNIK LOTU',625,187);}
+    else {ctx.fillStyle=game.boardSort==='distance'?'#f1bf4e':'#b9c7c2';ctx.fillText('DYSTANS',625,187);ctx.fillStyle=game.boardSort==='debt'?'#f1bf4e':'#b9c7c2';ctx.fillText('DŁUG',710,187);}
     ctx.textAlign='left';ctx.fillStyle='#b9c7c2';ctx.font='bold 12px system-ui';
-    ctx.fillText('MIEJSCE',120,211);ctx.fillText('NICK',225,211);ctx.fillText('TRYB',455,211);
-    ctx.textAlign='right';ctx.fillText('DŁUG',685,211);ctx.fillText('DYSTANS',835,211);
+    ctx.fillText('MIEJSCE',120,211);ctx.fillText('NICK',225,211);ctx.fillText('POZIOM',455,211);
+    ctx.textAlign='right';ctx.fillText(game.gameType==='flight'?'WYNIK':'DŁUG',685,211);ctx.fillText(game.gameType==='flight'?'BRAMKI':'DYSTANS',835,211);
     ctx.font='13px system-ui';
     const rows=game.leaderboard.slice(0,5);
     rows.forEach((score,index)=>{
@@ -379,11 +433,16 @@
       ctx.fillText(difficulties[score.difficulty]?.label||'BRAK DANYCH',455,y,150);
       ctx.textAlign='right';
       ctx.font='13px system-ui';ctx.fillStyle=index===0?'#f2bd4b':'#eee8d4';
-      ctx.fillText(`$ ${Math.floor(Number(score.debt)||0).toLocaleString('pl-PL')}`,685,y);
-      ctx.fillText(`${Math.floor(Number(score.distance)||0).toLocaleString('pl-PL')} m`,835,y);
+      ctx.fillText(game.gameType==='flight'?'—':`$ ${Math.floor(Number(score.debt)||0).toLocaleString('pl-PL')}`,685,y);
+      ctx.fillText(game.gameType==='flight'?`${Math.floor(Number(score.flight_score)||0)}`:`${Math.floor(Number(score.distance)||0).toLocaleString('pl-PL')} m`,835,y);
     });
     if(!rows.length) {ctx.textAlign='center';ctx.fillStyle='#eee8d4';ctx.fillText(game.leaderboardMessage||'Brak wyników.',W/2,258);}
     else if(game.leaderboardMessage) {ctx.textAlign='center';ctx.fillStyle='#b9c7c2';ctx.font='12px system-ui';ctx.fillText(game.leaderboardMessage,W/2,385);}
+    if(game.gameType==='flight') {
+      rect(190,432,280,54,'#d95143');rect(196,438,268,42,'#efb847');
+      rect(490,432,280,54,'#52747a');rect(496,438,268,42,'#d3d5b5');
+      ctx.textAlign='center';ctx.fillStyle='#27363b';ctx.font='900 15px system-ui';ctx.fillText('LEĆ JESZCZE RAZ',330,465);ctx.fillText('WYBIERZ TRYB',630,465);ctx.textAlign='left';return;
+    }
     let earned=[];try{earned=JSON.parse(localStorage.getItem('gierka_achievements')||'[]');}catch{}
     const missionSummary=game.mission
       ? `MISJA: ${game.mission.label} · ${game.missionDone?'WYKONANA':'niewykonana'}`
@@ -399,11 +458,14 @@
   function drawReadyPanel() {
     ctx.fillStyle='rgba(14,27,34,.72)';ctx.fillRect(0,0,W,H);rect(185,74,590,400,'#e1bf78');rect(193,82,574,384,'#263b43');
     ctx.textAlign='center';ctx.fillStyle='#ffe2a0';ctx.font='900 34px system-ui';ctx.fillText('GIERKA KOMPUTEROWA',W/2,130);
-    ctx.fillStyle='#eee8d4';ctx.font='15px system-ui';ctx.fillText('Edward Gierek rusza w trasę. Fabryka już czeka!',W/2,166);ctx.fillText('Skacz nad pojazdami, kucaj pod bocianami. Zbieraj zapasy.',W/2,190);
-    ctx.fillStyle='#f1bf4e';ctx.font='bold 13px system-ui';ctx.fillText('WYBIERZ TRYB',W/2,225);
-    const keys=['easy','normal','hard'];keys.forEach((key,i)=>{const x=248+i*156,selected=game.difficulty===key;rect(x,239,146,38,selected?'#d69c3e':'#40565a');ctx.fillStyle=selected?'#24363a':'#eee8d4';ctx.font='bold 11px system-ui';ctx.fillText(difficulties[key].label,x+73,263);});
-    ctx.fillStyle='#b9c7c2';ctx.font='12px system-ui';ctx.fillText('↑ / Spacja: skok · ↓: kucanie · Esc: pauza · M: dźwięk',W/2,352);ctx.fillText('Głośność zmienisz klawiszami + / − podczas pauzy.',W/2,373);
-    rect(343,402,274,54,'#d95143');rect(349,408,262,42,'#efb847');ctx.fillStyle='#27363b';ctx.font='900 18px system-ui';ctx.fillText('ROZPOCZNIJ BIEG',W/2,436);ctx.textAlign='left';
+    ctx.fillStyle='#eee8d4';ctx.font='15px system-ui';ctx.fillText('Edward Gierek rusza w trasę. Fabryka już czeka!',W/2,166);
+    ctx.fillStyle='#f1bf4e';ctx.font='bold 13px system-ui';ctx.fillText('WYBIERZ GIERKĘ',W/2,198);
+    const modes=[['runner','WIELKA UCIECZKA','Bieg przez dekadę'],['flight','BOCIANEM PRZEZ BLOKI','Lot po rekord']];
+    modes.forEach(([id,title,subtitle],i)=>{const x=217+i*270,selected=game.gameType===id;rect(x,210,256,55,selected?'#d69c3e':'#40565a');ctx.fillStyle=selected?'#24363a':'#eee8d4';ctx.font='900 13px system-ui';ctx.fillText(title,x+128,233);ctx.font='11px system-ui';ctx.fillText(subtitle,x+128,251);});
+    ctx.fillStyle='#f1bf4e';ctx.font='bold 12px system-ui';ctx.fillText('POZIOM TRUDNOŚCI',W/2,286);
+    const keys=['easy','normal','hard'];keys.forEach((key,i)=>{const x=226+i*170,selected=game.difficulty===key;rect(x,294,158,34,selected?'#d69c3e':'#40565a');ctx.fillStyle=selected?'#24363a':'#eee8d4';ctx.font='bold 10px system-ui';ctx.fillText(difficulties[key].label,x+79,316);});
+    ctx.fillStyle='#b9c7c2';ctx.font='12px system-ui';ctx.fillText(game.gameType==='flight'?'Spacja / klik: machnij skrzydłami · Omijaj kominy i bloki':'↑ / Spacja: skok · ↓: kucanie · Omijaj przeszkody',W/2,350);
+    rect(343,414,274,50,'#d95143');rect(349,420,262,38,'#efb847');ctx.fillStyle='#27363b';ctx.font='900 17px system-ui';ctx.fillText(game.gameType==='flight'?'WZBIJAJ SIĘ!':'ROZPOCZNIJ BIEG',W/2,445);ctx.textAlign='left';
   }
   function drawPausePanel() {
     ctx.fillStyle='rgba(14,27,34,.72)';ctx.fillRect(0,0,W,H);rect(280,146,400,248,'#e1bf78');rect(288,154,384,232,'#263b43');
@@ -418,9 +480,14 @@
       else panel('BRAK GRAFIKI',[game.assetError,'Sprawdź pliki w folderze assets i odśwież stronę.'],'ODŚWIEŻ STRONĘ');
       return;
     }
-    drawSky();for(const p of game.pickups)drawPickup(p);for(const o of game.obstacles)drawObstacle(o);
-    for(const p of game.particles){ctx.globalAlpha=clamp(p.life/p.max,0,1);rect(p.x,p.y,5,5,p.color);}ctx.globalAlpha=1;
-    if(!(player.invuln>0&&Math.floor(player.blink*14)%2===0))drawGierek();drawHud();ctx.restore();
+    drawSky();
+    if(game.gameType==='flight')drawFlightWorld();
+    else {
+      for(const p of game.pickups)drawPickup(p);for(const o of game.obstacles)drawObstacle(o);
+      for(const p of game.particles){ctx.globalAlpha=clamp(p.life/p.max,0,1);rect(p.x,p.y,5,5,p.color);}ctx.globalAlpha=1;
+      if(!(player.invuln>0&&Math.floor(player.blink*14)%2===0))drawGierek();drawHud();
+    }
+    ctx.restore();
     if(game.mode==='ready') drawReadyPanel();
     if(game.mode==='over') drawGameOverPanel();
     if(game.mode==='paused') drawPausePanel();
@@ -468,14 +535,15 @@
     e.preventDefault();audio();canvas.setPointerCapture?.(e.pointerId);
     const {x,y}=pointerPoint(e);
     if(game.mode==='ready') {
-      if(y>=239&&y<=277){const i=clamp(Math.floor((x-248)/156),0,2);game.difficulty=['easy','normal','hard'][i];saveSettings();return;}
-      if(x>=343&&x<=617&&y>=402&&y<=456){reset();return;}
+      if(y>=210&&y<=265&&x>=217&&x<=743){game.gameType=x<480?'runner':'flight';return;}
+      if(y>=294&&y<=328&&x>=226&&x<=700){const i=clamp(Math.floor((x-226)/170),0,2);game.difficulty=['easy','normal','hard'][i];saveSettings();return;}
+      if(x>=343&&x<=617&&y>=414&&y<=464){reset();return;}
       return;
     }
     if(game.mode==='paused') {if(x>=330&&x<=630&&y>=270&&y<=324)pauseGame();else if(y>=328&&y<=365){game.volume=clamp(game.volume+(x<W/2?-.1:.1),0,1);saveSettings();}return;}
     if(game.mode==='over') {
       if(y>=176&&y<=202) {
-        if(x>=305&&x<450)game.boardPeriod='all';else if(x>=450&&x<590)game.boardPeriod='week';else if(x>=590&&x<700)game.boardSort='distance';else if(x>=700&&x<775)game.boardSort='debt';
+        if(x>=305&&x<450)game.boardPeriod='all';else if(x>=450&&x<590)game.boardPeriod='week';else if(game.gameType==='runner'&&x>=590&&x<700)game.boardSort='distance';else if(game.gameType==='runner'&&x>=700&&x<775)game.boardSort='debt';
         void loadLeaderboard();return;
       }
       if(y>=432&&y<=486&&x>=190&&x<=470){reset();return;}
@@ -488,6 +556,7 @@
     }
     if(y<82&&x>820){game.muted=!game.muted;saveSettings();return;}
     if(y<82&&x>700){pauseGame();return;}
+    if(game.gameType==='flight'){jump();return;}
     if(e.pointerType==='touch') {
       if(x<W/2||y>=H*.72) setCrouch(true); else jump();
     } else jump();
