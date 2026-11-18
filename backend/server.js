@@ -40,6 +40,33 @@ if (!scoreColumns.some((column) => column.name === 'flight_score')) {
   db.exec('ALTER TABLE scores ADD COLUMN flight_score INTEGER NOT NULL DEFAULT 0');
 }
 
+const insertScore = db.prepare(
+  'INSERT INTO scores (nickname, debt, distance, difficulty, game_mode, flight_score) VALUES (?, ?, ?, ?, ?, ?)'
+);
+const getScore = db.prepare(
+  'SELECT id, nickname, debt, distance, difficulty, game_mode, flight_score, created_at FROM scores WHERE id = ?'
+);
+// Prepare each leaderboard query once (mode x sort x period) instead of on every request.
+const listQueries = new Map();
+function listQuery(gameMode, sort, period) {
+  const key = `${gameMode}|${sort}|${period}`;
+  if (!listQueries.has(key)) {
+    const orderBy = gameMode === 'flight'
+      ? 'flight_score DESC, created_at ASC'
+      : sort === 'debt' ? 'debt DESC, distance DESC' : 'distance DESC, debt ASC';
+    const periodFilter = period === 'week'
+      ? "WHERE game_mode = ? AND created_at >= datetime('now', '-7 days')"
+      : 'WHERE game_mode = ?';
+    listQueries.set(key, db.prepare(`
+      SELECT id, nickname, debt, distance, difficulty, game_mode, flight_score, created_at
+      FROM scores ${periodFilter}
+      ORDER BY ${orderBy}, created_at ASC
+      LIMIT 10
+    `));
+  }
+  return listQueries.get(key);
+}
+
 const app = express();
 app.use(cors({ origin: CORS_ORIGIN === '*' ? '*' : CORS_ORIGIN.split(',').map((s) => s.trim()) }));
 app.use(express.json({ limit: '8kb' }));
@@ -48,19 +75,7 @@ app.get('/api/scores', (req, res) => {
   const gameMode = req.query.mode === 'flight' ? 'flight' : 'runner';
   const sort = req.query.sort === 'debt' ? 'debt' : 'distance';
   const period = req.query.period === 'week' ? 'week' : 'all';
-  const orderBy = gameMode === 'flight'
-    ? 'flight_score DESC, created_at ASC'
-    : sort === 'debt' ? 'debt DESC, distance DESC' : 'distance DESC, debt ASC';
-  const periodFilter = period === 'week'
-    ? "WHERE game_mode = ? AND created_at >= datetime('now', '-7 days')"
-    : 'WHERE game_mode = ?';
-  const scores = db.prepare(`
-    SELECT id, nickname, debt, distance, difficulty, game_mode, flight_score, created_at
-    FROM scores
-    ${periodFilter}
-    ORDER BY ${orderBy}, created_at ASC
-    LIMIT 10
-  `).all(gameMode);
+  const scores = listQuery(gameMode, sort, period).all(gameMode);
   res.json({ scores, sort, period, gameMode });
 });
 
@@ -89,19 +104,15 @@ app.post('/api/scores', (req, res) => {
     return res.status(400).json({ error: 'difficulty must be easy, normal, or hard' });
   }
 
-  const result = db.prepare(
-    'INSERT INTO scores (nickname, debt, distance, difficulty, game_mode, flight_score) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(nickname, gameMode === 'runner' ? debt : 0, gameMode === 'runner' ? distance : 0, difficulty, gameMode, gameMode === 'flight' ? flightScore : 0);
-  const score = db.prepare(
-    'SELECT id, nickname, debt, distance, difficulty, game_mode, flight_score, created_at FROM scores WHERE id = ?'
-  ).get(result.lastInsertRowid);
+  const result = insertScore.run(nickname, gameMode === 'runner' ? debt : 0, gameMode === 'runner' ? distance : 0, difficulty, gameMode, gameMode === 'flight' ? flightScore : 0);
+  const score = getScore.get(result.lastInsertRowid);
   return res.status(201).json(score);
 });
 
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
 // Serve the game and its generated sprite assets from this same origin.
-app.use('/assets', express.static(path.join(__dirname, '..', 'assets')));
+app.use('/assets', express.static(path.join(__dirname, '..', 'assets'), { maxAge: '7d' }));
 app.get('/', (_req, res) => {
   res.sendFile(path.join(__dirname, '..', 'index.html'));
 });

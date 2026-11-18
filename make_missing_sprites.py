@@ -1,4 +1,5 @@
 """Create transparent fallback sprites for pickups and the missing worker art."""
+from __future__ import annotations
 
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
@@ -18,16 +19,22 @@ def font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
 
 
 def worker() -> None:
-    im = Image.new("RGBA", (120, 170), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
-    d.rounded_rectangle((34, 52, 87, 116), radius=8, fill="#527151", outline="#273d32", width=4)
-    d.ellipse((39, 20, 82, 64), fill="#ddb08a", outline="#5b453a", width=3)
-    d.rectangle((37, 21, 84, 32), fill="#51453b")
-    d.line((43, 112, 40, 157), fill="#273942", width=13); d.line((76, 112, 80, 157), fill="#273942", width=13)
-    d.line((36, 66, 19, 86), fill="#ddb08a", width=10); d.line((84, 66, 101, 86), fill="#ddb08a", width=10)
-    d.line((12, 18, 108, 18), fill="#68573f", width=6); d.rectangle((15, 22, 106, 65), fill="#f4e9cc", outline="#68573f", width=3)
-    f = font(13); d.text((60, 31), "CHLEBA!", font=f, fill="#bd3435", anchor="mm")
-    d.text((60, 49), "I WOLNOŚCI", font=font(9), fill="#bd3435", anchor="mm")
-    im.save(OUT / "robotnik.png", optimize=True)
+    """Draw at 4x and downsample with LANCZOS so edges are smooth on HiDPI screens."""
+    S = 4
+    im = Image.new("RGBA", (120 * S, 170 * S), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
+    def b(*v): return tuple(int(n * S) for n in v)
+    leg, skin = "#273942", "#ddb08a"
+    d.line(b(43, 112, 40, 157), fill=leg, width=13 * S); d.line(b(76, 112, 80, 157), fill=leg, width=13 * S)
+    d.rounded_rectangle(b(34, 150, 50, 160), radius=4 * S, fill="#1d2a30"); d.rounded_rectangle(b(70, 150, 90, 160), radius=4 * S, fill="#1d2a30")
+    d.rounded_rectangle(b(34, 52, 87, 116), radius=8 * S, fill="#527151", outline="#273d32", width=4 * S)
+    d.line(b(36, 66, 19, 86), fill=skin, width=10 * S); d.line(b(84, 66, 101, 86), fill=skin, width=10 * S)
+    d.ellipse(b(39, 20, 82, 64), fill=skin, outline="#5b453a", width=3 * S)
+    d.pieslice(b(37, 17, 84, 52), 180, 360, fill="#51453b")
+    d.line(b(12, 18, 108, 18), fill="#68573f", width=6 * S)
+    d.rectangle(b(15, 22, 106, 65), fill="#f4e9cc", outline="#68573f", width=3 * S)
+    d.text(b(60, 34), "CHLEBA!", font=font(13 * S), fill="#bd3435", anchor="mm")
+    d.text(b(60, 52), "I WOLNOŚCI", font=font(9 * S), fill="#bd3435", anchor="mm")
+    im.resize((240, 340), Image.LANCZOS).save(OUT / "robotnik.png", optimize=True)
 
 
 def orange() -> None:
@@ -56,4 +63,5 @@ def sausage() -> None:
 
 
 if __name__ == "__main__":
-    worker(); orange(); dollar(); sausage()
+    # orange/dollar/sausage are now photo sprites in assets/ - only regenerate the drawn worker.
+    worker()

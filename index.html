@@ -31,7 +31,12 @@
   const ctx = canvas.getContext('2d');
   const nicknameControl = document.getElementById('nickname-control');
   const nicknameInput = document.getElementById('nickname');
-  const W = canvas.width, H = canvas.height, GROUND = 438;
+  const W = 960, H = 540, GROUND = 438;
+  const DPR = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = W * DPR; canvas.height = H * DPR;
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  ctx.imageSmoothingQuality = 'high';
+  const fmt = new Intl.NumberFormat('pl-PL');
   const rand = (a,b) => a + Math.random() * (b-a);
   const clamp = (n,a,b) => Math.max(a,Math.min(b,n));
   const difficulties = {
@@ -46,7 +51,7 @@
     {id:'dollar',label:'Zbierz 2 dolary',goal:2},
     {id:'sausage',label:'Zdobądź kiełbasę',goal:1}
   ];
-  const game = { mode:'loading', gameType:'runner', last:0, elapsed:0, distance:0, debt:0, speed:330, spawn:1.2, obstacles:[], pickups:[], particles:[], shake:0, sound:null, muted:false, volume:.65, jumpHeld:false, assetsReady:false, assetError:'', nickname:'Anonim', scoreSubmitted:false, leaderboard:[], leaderboardMessage:'Ładowanie rekordów…', difficulty:'normal', boardSort:'distance', boardPeriod:'all', flightY:250, flightVelocity:0, flightPipes:[], flightSpawn:0, flightScore:0, mission:null, missionProgress:0, missionDone:false, missionsCompleted:0, nextMissionDistance:0, dodged:0, message:'', messageTime:0, scenery:'osiedle', pauseFrom:'playing', bestDistance:0, achievementNotice:'', settingsOpen:false };
+  const game = { mode:'loading', gameType:'runner', last:0, elapsed:0, distance:0, debt:0, speed:330, spawn:1.2, obstacles:[], pickups:[], particles:[], shake:0, sound:null, muted:false, volume:.65, jumpHeld:false, assetsReady:false, assetError:'', nickname:'Anonim', scoreSubmitted:false, leaderboard:[], leaderboardMessage:'Ładowanie rekordów…', difficulty:'normal', boardSort:'distance', boardPeriod:'all', flightY:250, flightVelocity:0, flightPipes:[], flightSpawn:0, flightScore:0, mission:null, missionProgress:0, missionDone:false, missionsCompleted:0, nextMissionDistance:0, dodged:0, message:'', messageTime:0, scenery:'osiedle', pauseFrom:'playing', bestDistance:0, achievementNotice:'', settingsOpen:false, earned:0 };
   const jumpKeysDown = new Set();
   const player = { x:145, y:GROUND-86, w:54, h:86, vy:0, lives:3, grounded:true, crouch:false, invuln:0, shield:0, boost:0, doubleJump:false, blink:0 };
   const clouds = Array.from({length:6},()=>({x:rand(0,W),y:rand(45,170),s:rand(.7,1.5)}));
@@ -71,11 +76,6 @@
     game.muted=!!prefs.muted;game.volume=clamp(Number.isFinite(prefs.volume)?prefs.volume:.65,0,1);
   } catch {}
   function saveSettings() {try{localStorage.setItem('gierka_settings',JSON.stringify({difficulty:game.difficulty,muted:game.muted,volume:game.volume}));}catch{}}
-  const ridgePath = new Path2D();
-  ridgePath.moveTo(-110,GROUND-92);
-  for(let x=-110;x<=W+110;x+=55) ridgePath.lineTo(x,GROUND-92-Math.sin(x/96)*15);
-  ridgePath.lineTo(W+110,GROUND);ridgePath.lineTo(-110,GROUND);ridgePath.closePath();
-
   function audio() {
     if (game.muted) return null;
     try {
@@ -200,6 +200,7 @@
       toast('MISJA WYKONANA! Dług +$100 000');sound('mission');
     }
   }
+  function countAchievements() {try{return JSON.parse(localStorage.getItem('gierka_achievements')||'[]').length;}catch{return 0;}}
   function unlockAchievement(id,label) {
     let unlocked=[];try{unlocked=JSON.parse(localStorage.getItem('gierka_achievements')||'[]');}catch{}
     if(unlocked.includes(id))return;
@@ -215,6 +216,7 @@
       if(game.distance>=1000)unlockAchievement('marathon','TOWARZYSZ MARATONU');
       if(game.dodged>=20)unlockAchievement('evasive','MISTRZ UNIKÓW');
       if(game.missionsCompleted>0)unlockAchievement('mission','PRZODOWNIK PRACY');
+      game.earned=countAchievements();
       void submitScore();
     }
   }
@@ -304,68 +306,131 @@
     }
   }
 
+
+  // ---------- Cached graphics (built once, reused every frame) ----------
+  const iw = im => im.naturalWidth || im.width, ih = im => im.naturalHeight || im.height;
+  function makeCanvas(w,h) { const c=document.createElement('canvas'); c.width=Math.round(w*DPR); c.height=Math.round(h*DPR); const x=c.getContext('2d'); x.scale(DPR,DPR); x.imageSmoothingQuality='high'; return [c,x]; }
+  // Downscale big sprites once (in halving steps) instead of resampling huge bitmaps 60x a second.
+  function downscale(img,max) {
+    const s=max/Math.max(iw(img),ih(img)); if(s>=1) return img;
+    let src=img,w=iw(img),h=ih(img);const tw=Math.round(w*s),th=Math.round(h*s);
+    const step=(nw,nh)=>{const c=document.createElement('canvas');c.width=nw;c.height=nh;const x=c.getContext('2d');x.imageSmoothingQuality='high';x.drawImage(src,0,0,nw,nh);src=c;};
+    while(w/2>tw){w=Math.round(w/2);h=Math.round(h/2);step(w,h);}
+    step(tw,th);return src;
+  }
+  function rr(x,y,w,h,r) { ctx.beginPath(); ctx.roundRect(x,y,w,h,r); }
+  function panelFrame(x,y,w,h) {
+    const g=ctx.createLinearGradient(0,y,0,y+h); g.addColorStop(0,'#f0cf8a'); g.addColorStop(1,'#c99c55');
+    ctx.fillStyle=g; rr(x,y,w,h,14); ctx.fill();
+    const g2=ctx.createLinearGradient(0,y+8,0,y+h-8); g2.addColorStop(0,'#2d4650'); g2.addColorStop(1,'#1f323a');
+    ctx.fillStyle=g2; rr(x+8,y+8,w-16,h-16,9); ctx.fill();
+  }
+  function btn(x,y,w,h,outer,inner) {
+    ctx.fillStyle=outer; rr(x,y,w,h,10); ctx.fill();
+    ctx.fillStyle=inner; rr(x+6,y+6,w-12,h-12,6); ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,.22)'; rr(x+6,y+6,w-12,(h-12)*.45,6); ctx.fill();
+  }
+  function hudBar() {
+    ctx.fillStyle='rgba(20,39,48,.86)'; rr(18,16,924,63,10); ctx.fill();
+    ctx.strokeStyle='rgba(225,191,120,.55)'; ctx.lineWidth=2; rr(19,17,922,61,9); ctx.stroke();
+  }
+  const skyLayer = (() => {
+    const [c,x]=makeCanvas(W,H);
+    const g=x.createLinearGradient(0,0,0,H); g.addColorStop(0,'#5fa8c6'); g.addColorStop(.5,'#9ccfd3'); g.addColorStop(.78,'#d3e4c6'); g.addColorStop(1,'#f0d89f');
+    x.fillStyle=g; x.fillRect(0,0,W,H);
+    const glow=x.createRadialGradient(790,103,8,790,103,150); glow.addColorStop(0,'rgba(255,240,180,.85)'); glow.addColorStop(.28,'rgba(255,231,160,.35)'); glow.addColorStop(1,'rgba(255,231,160,0)');
+    x.fillStyle=glow; x.fillRect(600,0,360,260);
+    x.fillStyle='#fff0b8'; x.beginPath(); x.arc(790,103,36,0,Math.PI*2); x.fill();
+    return c;
+  })();
+  const cloudSprite = (() => {
+    const [c,x]=makeCanvas(130,50);
+    x.fillStyle='#fbf8ec';
+    for(const [cx,cy,r] of [[28,34,16],[52,24,21],[78,29,18],[100,36,13],[64,38,16]]){x.beginPath();x.arc(cx,cy,r,0,Math.PI*2);x.fill();}
+    x.fillRect(22,34,86,16);
+    x.fillStyle='rgba(120,160,175,.22)'; x.fillRect(22,44,86,6);
+    return c;
+  })();
+  const groundTile = (() => {
+    const TW=48, TH=H-GROUND, [c,x]=makeCanvas(TW,TH);
+    const g=x.createLinearGradient(0,12,0,TH); g.addColorStop(0,'#d6aa62'); g.addColorStop(1,'#b98c4a'); x.fillStyle=g; x.fillRect(0,0,TW,TH);
+    x.fillStyle='#5f8c4b'; x.fillRect(0,0,TW,12); x.fillStyle='#4a7539'; x.fillRect(0,9,TW,3);
+    x.fillStyle='#74a35a'; for(const bx of [4,13,22,31,41]){x.beginPath();x.moveTo(bx,0);x.lineTo(bx+2,-0);x.lineTo(bx+1,5);x.fill();}
+    x.fillStyle='rgba(0,0,0,.16)'; x.fillRect(0,12,TW,3);
+    x.fillStyle='#a8763a'; x.fillRect(0,17,26,4); x.fillStyle='#e3bd78'; x.fillRect(22,40,18,3);
+    x.fillStyle='#9a6c36'; x.beginPath(); x.ellipse(8,62,5,3,0,0,Math.PI*2); x.fill(); x.beginPath(); x.ellipse(34,80,4,2.5,0,0,Math.PI*2); x.fill();
+    return c;
+  })();
+  const groundPattern = ctx.createPattern(groundTile,'repeat');
+  groundPattern.setTransform?.(new DOMMatrix().scale(1/DPR));
+  const pipeTile = (() => {
+    const [c,x]=makeCanvas(86,64);
+    const g=x.createLinearGradient(0,0,86,0); g.addColorStop(0,'#7d9a73'); g.addColorStop(.35,'#5f7b58'); g.addColorStop(1,'#3d5540'); x.fillStyle=g; x.fillRect(0,0,86,64);
+    x.fillStyle='rgba(0,0,0,.2)'; x.fillRect(0,62,86,2); x.fillRect(42,0,2,62);
+    x.fillStyle='rgba(255,255,255,.12)'; x.fillRect(0,0,86,2);
+    for(const [wx,wy,lit] of [[10,12,1],[26,12,0],[52,12,0],[68,12,1],[10,38,0],[26,38,1],[52,38,1],[68,38,0]]){x.fillStyle=lit?'#e9cf7d':'#2c4038';x.fillRect(wx,wy,10,14);}
+    return c;
+  })();
+  const pipePattern = ctx.createPattern(pipeTile,'repeat');
+  pipePattern.setTransform?.(new DOMMatrix().scale(1/DPR));
+  const rubinSprite = (() => {
+    const [c,x]=makeCanvas(58,78);
+    x.fillStyle='rgba(0,0,0,.35)'; x.fillRect(8,72,8,6); x.fillRect(42,72,8,6);
+    x.strokeStyle='#2a2622'; x.lineWidth=2; x.beginPath(); x.moveTo(29,16); x.lineTo(14,2); x.moveTo(29,16); x.lineTo(44,3); x.stroke();
+    const g=x.createLinearGradient(0,16,0,74); g.addColorStop(0,'#7a5a3c'); g.addColorStop(1,'#4d3826');
+    x.fillStyle=g; x.beginPath(); x.roundRect(3,16,52,58,6); x.fill();
+    x.strokeStyle='#33261a'; x.lineWidth=2; x.stroke();
+    x.fillStyle='#1d2528'; x.beginPath(); x.roundRect(8,21,34,34,7); x.fill();
+    const sg=x.createRadialGradient(22,32,2,25,38,24); sg.addColorStop(0,'#9db7b4'); sg.addColorStop(1,'#46605f'); x.fillStyle=sg; x.beginPath(); x.roundRect(10,23,30,30,6); x.fill();
+    x.fillStyle='rgba(255,255,255,.28)'; x.beginPath(); x.ellipse(19,30,7,4,-.5,0,Math.PI*2); x.fill();
+    x.fillStyle='#d9c28a'; x.beginPath(); x.arc(48,28,3.5,0,Math.PI*2); x.fill(); x.beginPath(); x.arc(48,40,3.5,0,Math.PI*2); x.fill();
+    x.strokeStyle='#2a1f16'; x.lineWidth=1.5; for(let i=0;i<4;i++){x.beginPath();x.moveTo(11+i*8,62);x.lineTo(11+i*8,68);x.stroke();}
+    return c;
+  })();
+  function shadow(cx,w,alpha=.2) { ctx.fillStyle=`rgba(40,28,10,${alpha})`; ctx.beginPath(); ctx.ellipse(cx,GROUND+7,w/2,5,0,0,Math.PI*2); ctx.fill(); }
   function rect(x,y,w,h,color) {ctx.fillStyle=color;ctx.fillRect(Math.round(x),Math.round(y),Math.round(w),Math.round(h));}
   function drawContain(image,x,y,w,h) {
-    const scale=Math.min(w/image.naturalWidth,h/image.naturalHeight);
-    const drawW=image.naturalWidth*scale,drawH=image.naturalHeight*scale;
+    const scale=Math.min(w/iw(image),h/ih(image));
+    const drawW=iw(image)*scale,drawH=ih(image)*scale;
     ctx.drawImage(image,x+(w-drawW)/2,y+(h-drawH)/2,drawW,drawH);
   }
+  const sceneKeys={osiedle:'background',fabryka:'backgroundFactory',blokowisko_bw:'backgroundBW',blokowisko_long:'backgroundLong',centrum:'backgroundColor',osiedle_niskie:'backgroundLowrise'};
   function drawSky() {
-    const grad=ctx.createLinearGradient(0,0,0,H);grad.addColorStop(0,'#78bad0');grad.addColorStop(.72,'#c6dfc7');grad.addColorStop(1,'#f0d89f');ctx.fillStyle=grad;ctx.fillRect(0,0,W,H);
-    // Sun and soft pixel clouds
-    ctx.fillStyle='#ffe7a0';ctx.beginPath();ctx.arc(790,103,39,0,Math.PI*2);ctx.fill();
-    for(const c of clouds) {const x=((c.x-game.distance*.17)%(W+180)+W+180)%(W+180)-70; const s=c.s;rect(x,c.y,75*s,19*s,'#f4f0dc');rect(x+15*s,c.y-12*s,42*s,14*s,'#f4f0dc');rect(x+66*s,c.y+5*s,26*s,13*s,'#f4f0dc');}
+    ctx.drawImage(skyLayer,0,0,W,H);
+    const cw=W+180;
+    for(const c of clouds) {const x=((c.x-game.distance*.17)%cw+cw)%cw-70; ctx.globalAlpha=.92; ctx.drawImage(cloudSprite,Math.round(x),Math.round(c.y-12*c.s),130*c.s*.85,50*c.s*.85);}
+    ctx.globalAlpha=1;
     // Each district uses a prepared, seamless panoramic strip from the supplied photos.
-    const sceneBackgrounds={
-      osiedle:sprites.background,
-      fabryka:sprites.backgroundFactory,
-      blokowisko_bw:sprites.backgroundBW,
-      blokowisko_long:sprites.backgroundLong,
-      centrum:sprites.backgroundColor,
-      osiedle_niskie:sprites.backgroundLowrise
-    };
-    const sceneImage=sceneBackgrounds[game.scenery];
+    const sceneImage=sprites[sceneKeys[game.scenery]]||sprites.background;
     if(sceneImage) {
-      const offset=(game.distance*.32)%sceneImage.naturalWidth, y=GROUND-250;
+      const iwid=sceneImage.naturalWidth, offset=Math.floor((game.distance*.32)%iwid), y=GROUND-250;
       ctx.drawImage(sceneImage,-offset,y);
-      ctx.drawImage(sceneImage,sceneImage.naturalWidth-offset,y);
-    } else {
-      const colors={stocznia:['#627d86','#496a73'],kopalnia:['#586c64','#3e554d'],centrum:['#9a8a72','#716657']}[game.scenery]||['#718d83','#536d65'];
-      rect(0,GROUND-220,W,220,colors[0]);
-      for(let i=0;i<12;i++) {
-        const x=((i*112-game.distance*.23)%(W+150)+W+150)%(W+150)-100;
-        const bh=90+(i*47%110), bw=72+(i*29%55);rect(x,GROUND-bh,bw,bh,colors[1]);
-        for(let wy=GROUND-bh+14;wy<GROUND-18;wy+=21)for(let wx=x+10;wx<x+bw-8;wx+=19)rect(wx,wy,8,10,'#d9bd79');
-      }
-      if(game.scenery==='stocznia') {ctx.strokeStyle='#d0b16f';ctx.lineWidth=5;for(let i=0;i<3;i++){let x=((i*370-game.distance*.35)%(W+220)+W+220)%(W+220)-110;ctx.beginPath();ctx.moveTo(x,GROUND-70);ctx.lineTo(x,GROUND-205);ctx.lineTo(x+105,GROUND-205);ctx.lineTo(x+105,GROUND-185);ctx.moveTo(x+54,GROUND-205);ctx.lineTo(x+54,GROUND-85);ctx.stroke();}}
-      if(game.scenery==='kopalnia') {for(let i=0;i<3;i++){let x=90+i*330-game.distance*.18%260;rect(x,GROUND-180,16,180,'#473e38');rect(x-8,GROUND-186,32,10,'#302f2b');ctx.fillStyle='rgba(235,230,208,.28)';ctx.beginPath();ctx.arc(x+8,GROUND-205-Math.sin(game.elapsed*2+i)*7,18,0,Math.PI*2);ctx.fill();}}
+      ctx.drawImage(sceneImage,iwid-offset,y);
     }
-    rect(0,GROUND,W,H-GROUND,'#c99c55');rect(0,GROUND,W,12,'#588147');
-    for(let x=-((game.distance*1.6)%48);x<W;x+=48) {rect(x,GROUND+17,26,4,'#b78243');rect(x+22,GROUND+40,18,3,'#dfb66d');}
+    // ground: tiled, scrolling pattern
+    const off=Math.floor((game.distance*1.6)%48);
+    ctx.save(); ctx.translate(-off,GROUND); ctx.fillStyle=groundPattern; ctx.fillRect(0,0,W+48,H-GROUND); ctx.restore();
   }
   function drawGierek() {
     const crouch=player.crouch&&player.grounded, x=player.x, y=player.y+(crouch?34:0), scaleY=crouch?.61:1;
+    shadow(x+27,46*(1-clamp((GROUND-86-player.y)/180,0,.6)),.22*(1-clamp((GROUND-86-player.y)/200,0,.7)));
     if(sprites.gierek) {
-      const image=sprites.gierek, drawW=player.h*image.naturalWidth/image.naturalHeight;
+      const image=sprites.gierek, drawW=player.h*iw(image)/ih(image);
       ctx.drawImage(image,x+(player.w-drawW)/2,y,drawW,player.h*scaleY);
     }
-    if(player.shield>0) {ctx.strokeStyle=`rgba(114,220,255,${.45+.2*Math.sin(game.elapsed*9)})`;ctx.lineWidth=4;ctx.beginPath();ctx.ellipse(x+27,y+42,42,50,0,0,Math.PI*2);ctx.stroke();}
+    if(player.shield>0) {const a=.45+.2*Math.sin(game.elapsed*9);const g=ctx.createRadialGradient(x+27,y+42,18,x+27,y+42,50);g.addColorStop(0,'rgba(114,220,255,0)');g.addColorStop(1,`rgba(114,220,255,${a*.45})`);ctx.fillStyle=g;ctx.beginPath();ctx.ellipse(x+27,y+42,42,50,0,0,Math.PI*2);ctx.fill();ctx.strokeStyle=`rgba(114,220,255,${a})`;ctx.lineWidth=3;ctx.stroke();}
   }
   function drawObstacle(o) {
+    if(o.type!=='stork'&&o.type!=='pothole') shadow(o.x+o.w/2,o.w*.9,.2);
+    if(o.type==='rubin') {ctx.drawImage(rubinSprite,Math.round(o.x),Math.round(o.y),o.w,o.h);return;}
     const image=sprites[o.type];
-    if(image) {if(o.type==='stork') drawContain(image,o.x-7,o.y-35,o.w+14,o.h+55);else drawContain(image,o.x,o.y,o.w,o.h);return;}
-    ctx.save();
-    if(o.type==='queue') {
-      rect(o.x,o.y+24,o.w,o.h-24,'#85715c');rect(o.x+8,o.y+6,o.w-16,27,'#e7d6ad');
-      ctx.fillStyle='#3a4545';ctx.font='bold 12px system-ui';ctx.fillText('ZA MIĘSEM',o.x+18,o.y+24);
-      for(let i=0;i<5;i++){const xx=o.x+8+i*21;ctx.fillStyle=['#c38e68','#b4a07a','#697c81'][i%3];ctx.beginPath();ctx.arc(xx+8,o.y+59,9,0,Math.PI*2);ctx.fill();rect(xx+3,o.y+66,10,20,'#39474a');}
-    } else if(o.type==='pothole') {ctx.fillStyle='#403c38';ctx.beginPath();ctx.ellipse(o.x+o.w/2,GROUND-4,o.w/2,14,0,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#d7ba77';ctx.lineWidth=4;ctx.stroke();}
-    else if(o.type==='tank') {rect(o.x+9,o.y+20,o.w-20,35,'#506248');rect(o.x+31,o.y+7,52,24,'#627653');rect(o.x+73,o.y+12,45,7,'#3e4c3b');ctx.fillStyle='#303d32';for(let i=0;i<6;i++){ctx.beginPath();ctx.arc(o.x+17+i*18,GROUND-3,11,0,Math.PI*2);ctx.fill();}}
-    else if(o.type==='rubin') {rect(o.x+5,o.y+5,o.w-10,o.h-10,'#423a34');rect(o.x+12,o.y+13,o.w-24,o.h-30,'#544436');rect(o.x+16,o.y+17,o.w-32,o.h-40,'#d67c43');rect(o.x+o.w/2-8,o.y+o.h-7,16,7,'#282b29');}
-    ctx.restore();
+    if(!image) return;
+    if(o.type==='stork') drawContain(image,o.x-7,o.y-35,o.w+14,o.h+55);else drawContain(image,o.x,o.y,o.w,o.h);
   }
   function drawPickup(p) {
-    ctx.save();ctx.translate(p.x,p.y);ctx.rotate(Math.sin(p.spin)*.12);
+    const glow=p.kind==='orange'?'255,158,61':p.kind==='dollar'?'120,220,255':'245,231,189';
+    const gg=ctx.createRadialGradient(p.x,p.y,4,p.x,p.y,30);gg.addColorStop(0,`rgba(${glow},.38)`);gg.addColorStop(1,`rgba(${glow},0)`);ctx.fillStyle=gg;ctx.fillRect(p.x-30,p.y-30,60,60);
+    ctx.save();ctx.translate(p.x,p.y+Math.sin(p.spin*.8)*3);ctx.rotate(Math.sin(p.spin)*.12);
     const image=sprites[p.kind];
     if(image) {
       const w=p.kind==='sausage'?42:34,h=p.kind==='sausage'?30:36;
@@ -374,28 +439,32 @@
     ctx.restore();
   }
   function drawHud() {
-    rect(18,16,924,63,'rgba(20,39,48,.83)');
+    hudBar();
     ctx.fillStyle='#f1bf4e';ctx.font='bold 15px system-ui';ctx.fillText('DŁUG ZAGRANICZNY',34,41);
-    ctx.fillStyle='#fff1c9';ctx.font='bold 25px ui-monospace,monospace';ctx.fillText('$ '+Math.floor(game.debt).toLocaleString('pl-PL'),34,66);
+    ctx.fillStyle='#fff1c9';ctx.font='bold 25px ui-monospace,monospace';ctx.fillText('$ '+fmt.format(Math.floor(game.debt)),34,66);
     ctx.fillStyle='#b8c7c1';ctx.font='bold 12px system-ui';ctx.fillText('DYSTANS  '+Math.floor(game.distance)+' m',315,43);
     ctx.fillStyle='#fff1c9';ctx.font='23px system-ui';for(let i=0;i<3;i++){ctx.globalAlpha=i<player.lives?1:.22;ctx.fillText('♥',770+i*34,54);}ctx.globalAlpha=1;
     if(player.boost>0||player.shield>0) {ctx.font='bold 11px system-ui';ctx.fillStyle=player.boost>0?'#ffb653':'#78dcff';ctx.fillText(player.boost>0?`POMARAŃCZOWY DOPING ${player.boost.toFixed(1)}s`:`TARCZA FINANSOWA ${player.shield.toFixed(1)}s`,315,65);}
     ctx.textAlign='right';ctx.fillStyle='#d4d0bd';ctx.font='bold 12px system-ui';ctx.fillText(game.muted?'DŹWIĘK: OFF [M]':'DŹWIĘK: ON [M]',920,38);ctx.fillText('PAUZA [ESC]',920,62);ctx.textAlign='left';
-    if(game.mission) {rect(325,87,310,29,'rgba(20,39,48,.8)');ctx.fillStyle=game.missionDone?'#f1bf4e':'#eee8d4';ctx.font='bold 11px system-ui';const progress=game.mission.id==='distance'?Math.floor(game.missionProgress):game.missionProgress;ctx.fillText(`MISJA: ${game.mission.label}  ${progress}/${game.mission.goal}`,336,106);}
+    if(game.mission) {ctx.fillStyle='rgba(20,39,48,.86)';rr(325,87,310,29,8);ctx.fill();ctx.fillStyle=game.missionDone?'#f1bf4e':'#eee8d4';ctx.font='bold 11px system-ui';const progress=game.mission.id==='distance'?Math.floor(game.missionProgress):game.missionProgress;ctx.fillText(`MISJA: ${game.mission.label}  ${progress}/${game.mission.goal}`,336,106);}
   }
   function drawFlightWorld() {
     for(const p of game.flightPipes) {
       const top=p.gapY-p.gap/2,bottom=p.gapY+p.gap/2;
-      rect(p.x,0,p.w,top,'#526b4c');rect(p.x-7,top-12,p.w+14,15,'#d5ae55');
-      rect(p.x,bottom,p.w,H-bottom,'#526b4c');rect(p.x-7,bottom-3,p.w+14,15,'#d5ae55');
-      rect(p.x+12,18,p.w-24,Math.max(0,top-36),'rgba(30,45,38,.24)');
-      if(bottom<H-15)rect(p.x+12,bottom+30,p.w-24,Math.max(0,H-bottom-48),'rgba(30,45,38,.24)');
+      ctx.save();ctx.translate(Math.round(p.x),0);ctx.fillStyle=pipePattern;
+      if(top>0){ctx.fillRect(0,0,p.w,top);}
+      if(bottom<H){ctx.fillRect(0,bottom,p.w,H-bottom);}
+      ctx.restore();
+      for(const [cy,ch] of [[top-14,16],[bottom-2,16]]) {
+        const g=ctx.createLinearGradient(p.x-7,0,p.x+p.w+7,0);g.addColorStop(0,'#f0cf7a');g.addColorStop(.5,'#d5ae55');g.addColorStop(1,'#a8863c');
+        ctx.fillStyle=g;rr(p.x-7,cy,p.w+14,ch,4);ctx.fill();ctx.strokeStyle='rgba(60,44,16,.55)';ctx.lineWidth=1.5;ctx.stroke();
+      }
       ctx.fillStyle='#263b43';ctx.font='bold 10px system-ui';ctx.textAlign='center';ctx.fillText('BUDOWA',p.x+p.w/2,Math.max(14,top-20));ctx.textAlign='left';
     }
     const bob=Math.sin(game.elapsed*8)*3;
     if(sprites.stork)drawContain(sprites.stork,112,game.flightY-30+bob,92,52);
     if(sprites.gierek)drawContain(sprites.gierek,148,game.flightY-24+bob,28,40);
-    rect(18,16,924,63,'rgba(20,39,48,.83)');
+    hudBar();
     ctx.fillStyle='#f1bf4e';ctx.font='bold 15px system-ui';ctx.fillText('LOT DEKADY',34,41);
     ctx.fillStyle='#fff1c9';ctx.font='bold 25px ui-monospace,monospace';ctx.fillText(`${game.flightScore} przelotów`,34,68);
     ctx.fillStyle='#eee8d4';ctx.font='bold 13px system-ui';ctx.fillText('SPACJA / KLIK — MACHNIJ SKRZYDŁAMI',365,53);
@@ -403,18 +472,18 @@
   }
   function panel(title,lines,button) {
     ctx.fillStyle='rgba(14,27,34,.74)';ctx.fillRect(0,0,W,H);
-    rect(185,115,590,315,'#e1bf78');rect(193,123,574,299,'#263b43');
+    panelFrame(185,115,590,315);
     ctx.textAlign='center';ctx.fillStyle='#ffe2a0';ctx.font='900 36px system-ui';ctx.fillText(title,W/2,174);
     ctx.fillStyle='#eee8d4';ctx.font='16px system-ui';lines.forEach((line,i)=>ctx.fillText(line,W/2,218+i*29));
-    if(button) {rect(343,340,274,54,'#d95143');rect(349,346,262,42,'#efb847');ctx.fillStyle='#27363b';ctx.font='900 18px system-ui';ctx.fillText(button,W/2,374);}
+    if(button) {btn(343,340,274,54,'#d95143','#efb847');ctx.fillStyle='#27363b';ctx.font='900 18px system-ui';ctx.fillText(button,W/2,374);}
     ctx.textAlign='left';
   }
   function drawGameOverPanel() {
     ctx.fillStyle='rgba(14,27,34,.78)';ctx.fillRect(0,0,W,H);
-    rect(72,28,816,484,'#e1bf78');rect(80,36,800,468,'#263b43');
+    panelFrame(72,28,816,484);
     ctx.textAlign='center';ctx.fillStyle='#ffe2a0';ctx.font='900 31px system-ui';ctx.fillText(game.gameType==='flight'?'KONIEC LOTU DEKADY':'DOSYĆ TYCH GIEREK',W/2,84);
     ctx.fillStyle='#eee8d4';ctx.font='bold 16px system-ui';
-    ctx.fillText(game.gameType==='flight'?`Bramki pokonane: ${game.flightScore}`:`Dług końcowy: $ ${Math.floor(game.debt).toLocaleString('pl-PL')}   ·   Dystans: ${Math.floor(game.distance)} m`,W/2,121);
+    ctx.fillText(game.gameType==='flight'?`Bramki pokonane: ${game.flightScore}`:`Dług końcowy: $ ${fmt.format(Math.floor(game.debt))}   ·   Dystans: ${Math.floor(game.distance)} m`,W/2,121);
     ctx.fillStyle='#f1bf4e';ctx.font='900 18px system-ui';ctx.fillText(game.gameType==='flight'?'TOP 5 LOTNIKÓW DEKADY':'TOP 5 NAJLEPSZYCH WYNIKÓW',W/2,165);
     ctx.textAlign='left';ctx.font='bold 11px system-ui';ctx.fillStyle=game.boardPeriod==='all'?'#f1bf4e':'#b9c7c2';ctx.fillText('WSZECH CZASÓW',320,187);ctx.fillStyle=game.boardPeriod==='week'?'#f1bf4e':'#b9c7c2';ctx.fillText('OSTATNIE 7 DNI',460,187);
     if(game.gameType==='flight') {ctx.fillStyle='#f1bf4e';ctx.fillText('WYNIK LOTU',625,187);}
@@ -433,30 +502,29 @@
       ctx.fillText(difficulties[score.difficulty]?.label||'BRAK DANYCH',455,y,150);
       ctx.textAlign='right';
       ctx.font='13px system-ui';ctx.fillStyle=index===0?'#f2bd4b':'#eee8d4';
-      ctx.fillText(game.gameType==='flight'?'—':`$ ${Math.floor(Number(score.debt)||0).toLocaleString('pl-PL')}`,685,y);
-      ctx.fillText(game.gameType==='flight'?`${Math.floor(Number(score.flight_score)||0)}`:`${Math.floor(Number(score.distance)||0).toLocaleString('pl-PL')} m`,835,y);
+      ctx.fillText(game.gameType==='flight'?'—':`$ ${fmt.format(Math.floor(Number(score.debt)||0))}`,685,y);
+      ctx.fillText(game.gameType==='flight'?`${Math.floor(Number(score.flight_score)||0)}`:`${fmt.format(Math.floor(Number(score.distance)||0))} m`,835,y);
     });
     if(!rows.length) {ctx.textAlign='center';ctx.fillStyle='#eee8d4';ctx.fillText(game.leaderboardMessage||'Brak wyników.',W/2,258);}
     else if(game.leaderboardMessage) {ctx.textAlign='center';ctx.fillStyle='#b9c7c2';ctx.font='12px system-ui';ctx.fillText(game.leaderboardMessage,W/2,385);}
     if(game.gameType==='flight') {
-      rect(190,432,280,54,'#d95143');rect(196,438,268,42,'#efb847');
-      rect(490,432,280,54,'#52747a');rect(496,438,268,42,'#d3d5b5');
+      btn(190,432,280,54,'#d95143','#efb847');
+      btn(490,432,280,54,'#52747a','#d3d5b5');
       ctx.textAlign='center';ctx.fillStyle='#27363b';ctx.font='900 15px system-ui';ctx.fillText('LEĆ JESZCZE RAZ',330,465);ctx.fillText('WYBIERZ TRYB',630,465);ctx.textAlign='left';return;
     }
-    let earned=[];try{earned=JSON.parse(localStorage.getItem('gierka_achievements')||'[]');}catch{}
     const missionSummary=game.mission
       ? `MISJA: ${game.mission.label} · ${game.missionDone?'WYKONANA':'niewykonana'}`
       : `MISJE WYKONANE: ${game.missionsCompleted}`;
     ctx.textAlign='center';ctx.fillStyle=game.missionsCompleted>0?'#f1bf4e':'#b9c7c2';ctx.font='11px system-ui';ctx.fillText(missionSummary,W/2,367);
-    ctx.fillStyle='#b9c7c2';ctx.fillText(`OSIĄGNIĘCIA: ${earned.length?earned.length+' odblokowane':'jeszcze brak — spróbuj ponownie!'}`,W/2,400);
+    ctx.fillStyle='#b9c7c2';ctx.fillText(`OSIĄGNIĘCIA: ${game.earned?game.earned+' odblokowane':'jeszcze brak — spróbuj ponownie!'}`,W/2,400);
     if(game.achievementNotice){ctx.fillStyle='#f1bf4e';ctx.fillText(`NOWE: ${game.achievementNotice}`,W/2,414);}
-    rect(190,432,280,54,'#d95143');rect(196,438,268,42,'#efb847');
-    rect(490,432,280,54,'#52747a');rect(496,438,268,42,'#d3d5b5');
+    btn(190,432,280,54,'#d95143','#efb847');
+    btn(490,432,280,54,'#52747a','#d3d5b5');
     ctx.textAlign='center';ctx.fillStyle='#27363b';ctx.font='900 15px system-ui';ctx.fillText('ZAGRAJ PONOWNIE',330,465);ctx.fillText('WYBIERZ POZIOM',630,465);
     ctx.textAlign='left';
   }
   function drawReadyPanel() {
-    ctx.fillStyle='rgba(14,27,34,.72)';ctx.fillRect(0,0,W,H);rect(185,74,590,400,'#e1bf78');rect(193,82,574,384,'#263b43');
+    ctx.fillStyle='rgba(14,27,34,.72)';ctx.fillRect(0,0,W,H);panelFrame(185,74,590,400);
     ctx.textAlign='center';ctx.fillStyle='#ffe2a0';ctx.font='900 34px system-ui';ctx.fillText('GIERKA KOMPUTEROWA',W/2,130);
     ctx.fillStyle='#eee8d4';ctx.font='15px system-ui';ctx.fillText('Edward Gierek rusza w trasę. Fabryka już czeka!',W/2,166);
     ctx.fillStyle='#f1bf4e';ctx.font='bold 13px system-ui';ctx.fillText('WYBIERZ GIERKĘ',W/2,198);
@@ -465,10 +533,10 @@
     ctx.fillStyle='#f1bf4e';ctx.font='bold 12px system-ui';ctx.fillText('POZIOM TRUDNOŚCI',W/2,286);
     const keys=['easy','normal','hard'];keys.forEach((key,i)=>{const x=226+i*170,selected=game.difficulty===key;rect(x,294,158,34,selected?'#d69c3e':'#40565a');ctx.fillStyle=selected?'#24363a':'#eee8d4';ctx.font='bold 10px system-ui';ctx.fillText(difficulties[key].label,x+79,316);});
     ctx.fillStyle='#b9c7c2';ctx.font='12px system-ui';ctx.fillText(game.gameType==='flight'?'Spacja / klik: machnij skrzydłami · Omijaj kominy i bloki':'↑ / Spacja: skok · ↓: kucanie · Omijaj przeszkody',W/2,350);
-    rect(343,414,274,50,'#d95143');rect(349,420,262,38,'#efb847');ctx.fillStyle='#27363b';ctx.font='900 17px system-ui';ctx.fillText(game.gameType==='flight'?'WZBIJAJ SIĘ!':'ROZPOCZNIJ BIEG',W/2,445);ctx.textAlign='left';
+    btn(343,414,274,50,'#d95143','#efb847');ctx.fillStyle='#27363b';ctx.font='900 17px system-ui';ctx.fillText(game.gameType==='flight'?'WZBIJAJ SIĘ!':'ROZPOCZNIJ BIEG',W/2,445);ctx.textAlign='left';
   }
   function drawPausePanel() {
-    ctx.fillStyle='rgba(14,27,34,.72)';ctx.fillRect(0,0,W,H);rect(280,146,400,248,'#e1bf78');rect(288,154,384,232,'#263b43');
+    ctx.fillStyle='rgba(14,27,34,.72)';ctx.fillRect(0,0,W,H);panelFrame(280,146,400,248);
     ctx.textAlign='center';ctx.fillStyle='#ffe2a0';ctx.font='900 32px system-ui';ctx.fillText('PAUZA',W/2,207);ctx.fillStyle='#eee8d4';ctx.font='14px system-ui';ctx.fillText('Esc — wróć do gry · M — dźwięk',W/2,242);
     rect(342,276,276,42,'#efb847');ctx.fillStyle='#27363b';ctx.font='900 16px system-ui';ctx.fillText('WRÓĆ DO BIEGU',W/2,303);ctx.fillStyle='#b9c7c2';ctx.font='12px system-ui';ctx.fillText(`Głośność: ${Math.round(game.volume*100)}%   [ − ] / [ + ]`,W/2,346);ctx.textAlign='left';
   }
@@ -484,7 +552,7 @@
     if(game.gameType==='flight')drawFlightWorld();
     else {
       for(const p of game.pickups)drawPickup(p);for(const o of game.obstacles)drawObstacle(o);
-      for(const p of game.particles){ctx.globalAlpha=clamp(p.life/p.max,0,1);rect(p.x,p.y,5,5,p.color);}ctx.globalAlpha=1;
+      for(const p of game.particles){ctx.globalAlpha=clamp(p.life/p.max,0,1);ctx.fillStyle=p.color;ctx.beginPath();ctx.arc(p.x,p.y,3,0,6.2832);ctx.fill();}ctx.globalAlpha=1;
       if(!(player.invuln>0&&Math.floor(player.blink*14)%2===0))drawGierek();drawHud();
     }
     ctx.restore();
@@ -497,7 +565,8 @@
   function loadSprites() {
     return Promise.all(Object.entries(spriteFiles).map(([name,src])=>new Promise((resolve,reject)=>{
       const image=new Image();
-      image.onload=()=>{sprites[name]=image;resolve(image);};
+      image.decoding='async';
+      image.onload=()=>{sprites[name]=name.startsWith('background')?image:downscale(image,320);resolve(image);};
       image.onerror=()=>reject(new Error(`Brak pliku: ${src}`));
       image.src=src;
     })));
